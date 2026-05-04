@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { supabase, functionsUrl } from './supabaseClient.js'
+import { hasSupabaseConfig, supabase, functionsUrl } from './supabaseClient.js'
 import './styles.css'
 import {
   Activity,
@@ -235,6 +235,36 @@ function CopyRow({ label, value }) {
       <button title={`Copy ${label}`} aria-label={`Copy ${label}`} onClick={() => navigator.clipboard?.writeText(value)}>
         <Copy size={15} />
       </button>
+    </div>
+  )
+}
+
+function MissingConfig() {
+  return (
+    <div className="loginShell">
+      <section className="loginIntro">
+        <div className="brandMark">
+          <span className="brandGlyph"><Zap size={24} /></span>
+          <span>TCX Pro</span>
+        </div>
+        <h1>Supabase config is missing from this deployment.</h1>
+        <div className="loginMetrics" aria-label="Required environment variables">
+          <span><Server size={16} /> VITE_SUPABASE_URL</span>
+          <span><KeyRound size={16} /> VITE_SUPABASE_ANON_KEY</span>
+        </div>
+      </section>
+
+      <section className="loginCard glass" aria-label="Deployment configuration error">
+        <div className="sectionEyebrow">Deploy setup</div>
+        <h2>Environment variables required</h2>
+        <div className="notice errorNotice">
+          Add the Supabase URL and anon key in your hosting provider, then redeploy the site.
+        </div>
+        <div className="envList">
+          <code>VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co</code>
+          <code>VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY</code>
+        </div>
+      </section>
     </div>
   )
 }
@@ -711,10 +741,12 @@ function Dashboard({ session }) {
 function App() {
   const [session, setSession] = useState(null)
   useEffect(() => {
+    if (!hasSupabaseConfig) return undefined
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => setSession(session))
     return () => sub.subscription.unsubscribe()
   }, [])
+  if (!hasSupabaseConfig) return <MissingConfig />
   return session ? <Dashboard session={session} /> : <Login />
 }
 

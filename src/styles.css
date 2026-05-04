@@ -224,6 +224,28 @@ code,
   font-size: 14px;
 }
 
+.errorNotice {
+  background: rgba(223, 75, 75, 0.1);
+  border-color: rgba(223, 75, 75, 0.28);
+}
+
+.envList {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.envList code {
+  display: block;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--input);
+  color: var(--text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .pos {
   color: #28c978 !important;
 }

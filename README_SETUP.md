@@ -57,7 +57,22 @@ npm run dev
 
 Open the URL shown by Vite, usually `http://localhost:5173`.
 
-## 4. Create EA connection in website
+## 4. Deploy website
+
+Set these environment variables in your hosting provider before building/deploying:
+
+```env
+VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
+```
+
+For Vercel: Project Settings -> Environment Variables -> add both values for Production, Preview, and Development if needed -> Redeploy.
+
+For Netlify: Site configuration -> Environment variables -> add both values -> Trigger deploy.
+
+Do not add `SUPABASE_SERVICE_ROLE_KEY` to the web app. That key is only for Supabase Edge Function secrets.
+
+## 5. Create EA connection in website
 
 1. Sign up / sign in.
 2. Create EA Instance.
@@ -66,7 +81,7 @@ Open the URL shown by Vite, usually `http://localhost:5173`.
    - `InpSupabaseEaToken`
    - `InpSupabaseFunctionsUrl`
 
-## 5. Install EA in MT5
+## 6. Install EA in MT5
 
 1. Copy `Three_Candle_EA_SUPABASE_WEB_FULL.mq5` to `MQL5/Experts/`.
 2. Compile in MetaEditor.
