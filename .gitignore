@@ -1,0 +1,16 @@
+.env
+.env.local
+.env.*.local
+!.env.example
+
+node_modules/
+dist/
+.vite/
+
+.DS_Store
+*.log
+
+.zencoder/
+.zenflow/
+
+supabase/.temp/
