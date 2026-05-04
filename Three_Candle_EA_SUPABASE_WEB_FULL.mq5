@@ -2890,6 +2890,133 @@ string TCX_StructureJson()
    return "{\"candles\":"+candles+",\"sweeps\":"+sweeps+"}";
 }
 
+string TCX_DealReasonText(long reason)
+{
+   if(reason==DEAL_REASON_SL) return "SL";
+   if(reason==DEAL_REASON_TP) return "TP";
+   if(reason==DEAL_REASON_SO) return "Stop out";
+   if(reason==DEAL_REASON_EXPERT) return "EA";
+   if(reason==DEAL_REASON_CLIENT) return "Manual";
+   if(reason==DEAL_REASON_MOBILE) return "Mobile";
+   if(reason==DEAL_REASON_WEB) return "Web";
+   if(reason==DEAL_REASON_ROLLOVER) return "Rollover";
+   if(reason==DEAL_REASON_VMARGIN) return "Variation margin";
+   if(reason==DEAL_REASON_SPLIT) return "Split";
+   return "Close";
+}
+
+string TCX_DealSideText(long entryType,long exitType)
+{
+   if(entryType==DEAL_TYPE_BUY)
+      return "BUY";
+   if(entryType==DEAL_TYPE_SELL)
+      return "SELL";
+   if(exitType==DEAL_TYPE_SELL)
+      return "BUY";
+   if(exitType==DEAL_TYPE_BUY)
+      return "SELL";
+   return "--";
+}
+
+string TCX_JsonPrice(double price)
+{
+   if(price<=0.0)
+      return "null";
+   return DoubleToString(price,_Digits);
+}
+
+ulong TCX_FindEntryDeal(long positionId,int exitIndex)
+{
+   for(int i=exitIndex-1;i>=0;i--)
+   {
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0)
+         continue;
+      if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)
+         continue;
+      if((long)HistoryDealGetInteger(deal,DEAL_MAGIC)!=InpMagic)
+         continue;
+      if((long)HistoryDealGetInteger(deal,DEAL_POSITION_ID)!=positionId)
+         continue;
+
+      long entry=HistoryDealGetInteger(deal,DEAL_ENTRY);
+      if(entry==DEAL_ENTRY_IN || entry==DEAL_ENTRY_INOUT)
+         return deal;
+   }
+   return 0;
+}
+
+string TCX_TradeHistoryJson(int maxRows)
+{
+   if(maxRows<=0)
+      maxRows=40;
+   if(maxRows>100)
+      maxRows=100;
+   if(!HistorySelect((datetime)0,TimeCurrent()))
+      return "[]";
+
+   string json="[";
+   int rows=0;
+   int total=HistoryDealsTotal();
+   for(int i=total-1;i>=0 && rows<maxRows;i--)
+   {
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0)
+         continue;
+      if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)
+         continue;
+      if((long)HistoryDealGetInteger(deal,DEAL_MAGIC)!=InpMagic)
+         continue;
+
+      long dealEntry=HistoryDealGetInteger(deal,DEAL_ENTRY);
+      if(dealEntry!=DEAL_ENTRY_OUT && dealEntry!=DEAL_ENTRY_INOUT && dealEntry!=DEAL_ENTRY_OUT_BY)
+         continue;
+
+      long positionId=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+      ulong entryDeal=TCX_FindEntryDeal(positionId,i);
+      long entryType=(entryDeal>0 ? HistoryDealGetInteger(entryDeal,DEAL_TYPE) : -1);
+      long exitType=HistoryDealGetInteger(deal,DEAL_TYPE);
+      datetime closeTime=(datetime)HistoryDealGetInteger(deal,DEAL_TIME);
+      datetime openTime=(entryDeal>0 ? (datetime)HistoryDealGetInteger(entryDeal,DEAL_TIME) : 0);
+      double profit=HistoryDealGetDouble(deal,DEAL_PROFIT);
+      double swap=HistoryDealGetDouble(deal,DEAL_SWAP);
+      double commission=HistoryDealGetDouble(deal,DEAL_COMMISSION);
+      double net=profit+swap+commission;
+      double sl=HistoryDealGetDouble(deal,DEAL_SL);
+      double tp=HistoryDealGetDouble(deal,DEAL_TP);
+      if(sl<=0.0 && entryDeal>0)
+         sl=HistoryDealGetDouble(entryDeal,DEAL_SL);
+      if(tp<=0.0 && entryDeal>0)
+         tp=HistoryDealGetDouble(entryDeal,DEAL_TP);
+
+      if(rows>0)
+         json+=",";
+      json+="{"
+            +"\"id\":\""+IntegerToString((long)deal)+"\""
+            +",\"positionId\":\""+IntegerToString(positionId)+"\""
+            +",\"type\":\""+TCX_DealSideText(entryType,exitType)+"\""
+            +",\"volume\":"+DoubleToString(HistoryDealGetDouble(deal,DEAL_VOLUME),VolumeDigits())
+            +",\"entryPrice\":"+(entryDeal>0 ? TCX_JsonPrice(HistoryDealGetDouble(entryDeal,DEAL_PRICE)) : "null")
+            +",\"exitPrice\":"+TCX_JsonPrice(HistoryDealGetDouble(deal,DEAL_PRICE))
+            +",\"sl\":"+TCX_JsonPrice(sl)
+            +",\"tp\":"+TCX_JsonPrice(tp)
+            +",\"profit\":"+DoubleToString(net,2)
+            +",\"grossProfit\":"+DoubleToString(profit,2)
+            +",\"swap\":"+DoubleToString(swap,2)
+            +",\"commission\":"+DoubleToString(commission,2)
+            +",\"openTime\":\""+(openTime>0 ? TCX_JsonEscape(TimeToString(openTime,TIME_DATE|TIME_SECONDS)) : "")+"\""
+            +",\"closeTime\":\""+TCX_JsonEscape(TimeToString(closeTime,TIME_DATE|TIME_SECONDS))+"\""
+            +",\"openTimeSec\":"+IntegerToString((long)openTime)
+            +",\"closeTimeSec\":"+IntegerToString((long)closeTime)
+            +",\"reason\":\""+TCX_JsonEscape(TCX_DealReasonText(HistoryDealGetInteger(deal,DEAL_REASON)))+"\""
+            +",\"comment\":\""+TCX_JsonEscape(HistoryDealGetString(deal,DEAL_COMMENT))+"\""
+            +"}";
+      rows++;
+   }
+   json+="]";
+   return json;
+}
+
 string TCX_BuildStateJson()
 {
    datetime now=TimeCurrent();
@@ -2965,6 +3092,7 @@ string TCX_BuildStateJson()
       +",\"candleTimer\":\""+TCX_JsonEscape(CandleCloseTimerText())+"\""
       +",\"position\":"+TCX_PositionJson()
       +",\"structure\":"+TCX_StructureJson()
+      +",\"tradeHistory\":"+TCX_TradeHistoryJson(50)
       +"}";
 }
 

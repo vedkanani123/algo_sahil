@@ -14,10 +14,12 @@ import {
   Copy,
   Database,
   Gauge,
+  History,
   KeyRound,
   ListChecks,
   Lock,
   LogOut,
+  Minus,
   PauseCircle,
   Pencil,
   PlayCircle,
@@ -95,6 +97,26 @@ function formatClock(value) {
   const date = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(date.getTime())) return 'Waiting'
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function formatHistoryTime(value) {
+  if (!value) return '--'
+  if (typeof value === 'string') return value
+  const date = new Date(Number(value) * 1000)
+  if (Number.isNaN(date.getTime())) return '--'
+  return date.toLocaleString([], { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function nearNumber(a, b, tolerance = 0.000001) {
+  const x = Number(a)
+  const y = Number(b)
+  return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) <= tolerance
+}
+
+function clampNumber(value, min, max) {
+  const x = Number(value)
+  if (!Number.isFinite(x)) return min
+  return Math.max(min, Math.min(max, x))
 }
 
 async function sha256Hex(text) {
@@ -269,7 +291,7 @@ function MissingConfig() {
   )
 }
 
-function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, lastSyncAt, isRefreshing }) {
+function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, lastSyncAt, isRefreshing, view, setView }) {
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState('')
   const [editSymbol, setEditSymbol] = useState('')
@@ -324,6 +346,10 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
       </div>
 
       <div className="topbarActions">
+        <div className="viewToggle" role="group" aria-label="Dashboard view">
+          <button className={view === 'dashboard' ? 'active' : ''} onClick={() => setView('dashboard')} title="Dashboard"><Activity size={16} /> Dashboard</button>
+          <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')} title="Trade history"><History size={16} /> Trades</button>
+        </div>
         <div className="syncBadge" title="Dashboard polls live data every 1 second">
           <span className="liveDot" />
           <span>1s live</span>
@@ -407,41 +433,113 @@ function StatCards({ state }) {
   )
 }
 
+function StepperInput({ label, value, onChange, onStep, stepLabel }) {
+  return (
+    <label className="stepperLabel">
+      <span>{label}</span>
+      <div className="stepperControl">
+        <button type="button" className="stepBtn" onClick={() => onStep(-1)} title={`Decrease ${label}`}><Minus size={15} /></button>
+        <input inputMode="decimal" value={value} onChange={e => onChange(e.target.value)} />
+        <button type="button" className="stepBtn" onClick={() => onStep(1)} title={`Increase ${label}`}><Plus size={15} /></button>
+      </div>
+      {stepLabel && <small>{stepLabel}</small>}
+    </label>
+  )
+}
+
 function CommandPanel({ session, selected, state, reloadCommands }) {
   const s = state?.state || {}
   const [busy, setBusy] = useState('')
   const [risk, setRisk] = useState({ lot: '0.01', risk: '100.00', rr: '3.0' })
   const [pc, setPc] = useState({ pc1: '30', pc2: '30', pc3: '40' })
+  const [riskDirty, setRiskDirty] = useState(false)
+  const [pcDirty, setPcDirty] = useState(false)
+  const [pendingRisk, setPendingRisk] = useState(null)
+  const [pendingPc, setPendingPc] = useState(null)
   const currency = s.currency || 'Money'
 
   useEffect(() => {
     if (!s) return
-    setRisk(r => ({ lot: String(s.lot ?? r.lot), risk: String(s.risk ?? r.risk), rr: String(s.rr ?? r.rr) }))
-    setPc(p => ({ pc1: String(s.pc1 ?? p.pc1), pc2: String(s.pc2 ?? p.pc2), pc3: String(s.pc3 ?? p.pc3) }))
-  }, [state?.updated_at])
+    if (pendingRisk && nearNumber(s.lot, pendingRisk.lot) && nearNumber(s.risk, pendingRisk.risk, 0.01) && nearNumber(s.rr, pendingRisk.rr, 0.01)) {
+      setPendingRisk(null)
+      setRiskDirty(false)
+    }
+    if (!riskDirty && !pendingRisk) {
+      setRisk(r => ({ lot: String(s.lot ?? r.lot), risk: String(s.risk ?? r.risk), rr: String(s.rr ?? r.rr) }))
+    }
+    if (pendingPc && nearNumber(s.pc1, pendingPc.pc1, 0.1) && nearNumber(s.pc2, pendingPc.pc2, 0.1) && nearNumber(s.pc3, pendingPc.pc3, 0.1)) {
+      setPendingPc(null)
+      setPcDirty(false)
+    }
+    if (!pcDirty && !pendingPc) {
+      setPc(p => ({ pc1: String(s.pc1 ?? p.pc1), pc2: String(s.pc2 ?? p.pc2), pc3: String(s.pc3 ?? p.pc3) }))
+    }
+  }, [state?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, riskDirty, pcDirty, pendingRisk, pendingPc])
 
   async function cmd(action, payload = {}) {
     if (!selected?.id) return alert('Create/select EA first')
     setBusy(action)
-    const res = await fetch(`${functionsUrl}/create-command`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify({ ea_id: selected.id, action, payload, client_id: uid() })
-    })
-    const json = await res.json().catch(() => ({}))
-    setBusy('')
-    if (!res.ok || !json.ok) alert(json.error || 'Command failed')
-    reloadCommands?.()
+    try {
+      const res = await fetch(`${functionsUrl}/create-command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ ea_id: selected.id, action, payload, client_id: uid() })
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.ok) {
+        alert(json.error || 'Command failed')
+        return false
+      }
+      reloadCommands?.()
+      return true
+    } finally {
+      setBusy('')
+    }
   }
 
-  function sendRiskSettings() {
+  function updateRiskField(key, value) {
+    setRisk(r => ({ ...r, [key]: value }))
+    setRiskDirty(true)
+  }
+
+  function updatePcField(key, value) {
+    setPc(p => ({ ...p, [key]: value }))
+    setPcDirty(true)
+  }
+
+  function stepRiskField(key, direction) {
+    const steps = { lot: 0.01, risk: 1, rr: 0.1 }
+    const decimals = { lot: 2, risk: 2, rr: 1 }
+    const min = { lot: 0.01, risk: 0.01, rr: 0.1 }
+    const max = { lot: 100, risk: 100000000, rr: 20 }
+    const next = clampNumber((Number(risk[key]) || 0) + direction * steps[key], min[key], max[key])
+    updateRiskField(key, next.toFixed(decimals[key]))
+  }
+
+  function stepPcField(key, direction) {
+    const next = clampNumber((Number(pc[key]) || 0) + direction, 0, 100)
+    updatePcField(key, next.toFixed(0))
+  }
+
+  async function sendRiskSettings() {
     const lot = Number(risk.lot)
     const riskAmount = Number(risk.risk)
     const rr = Number(risk.rr)
     if (!Number.isFinite(lot) || lot <= 0) return alert('Lot must be greater than zero')
     if (!Number.isFinite(riskAmount) || riskAmount <= 0) return alert('Risk amount must be greater than zero')
     if (!Number.isFinite(rr) || rr <= 0) return alert('RR must be greater than zero')
-    cmd(ACTIONS.SET_RISK, { lot, risk: riskAmount, rr })
+    const ok = await cmd(ACTIONS.SET_RISK, { lot, risk: riskAmount, rr })
+    if (ok) setPendingRisk({ lot, risk: riskAmount, rr })
+  }
+
+  async function sendPartialSettings() {
+    const next = {
+      pc1: clampNumber(pc.pc1, 0, 100),
+      pc2: clampNumber(pc.pc2, 0, 100),
+      pc3: clampNumber(pc.pc3, 0, 100)
+    }
+    const ok = await cmd(ACTIONS.SET_PARTIALS, next)
+    if (ok) setPendingPc(next)
   }
 
   return (
@@ -483,9 +581,9 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
         </div>
 
         <div className="settingsGrid">
-          <label>Lot<input inputMode="decimal" value={risk.lot} onChange={e => setRisk({ ...risk, lot: e.target.value })} /></label>
-          <label>Risk {currency}<input inputMode="decimal" value={risk.risk} onChange={e => setRisk({ ...risk, risk: e.target.value })} /></label>
-          <label>RR<input inputMode="decimal" value={risk.rr} onChange={e => setRisk({ ...risk, rr: e.target.value })} /></label>
+          <StepperInput label="Lot" value={risk.lot} onChange={value => updateRiskField('lot', value)} onStep={direction => stepRiskField('lot', direction)} stepLabel="+/- 0.01" />
+          <StepperInput label={`Risk ${currency}`} value={risk.risk} onChange={value => updateRiskField('risk', value)} onStep={direction => stepRiskField('risk', direction)} stepLabel="+/- 1" />
+          <StepperInput label="RR" value={risk.rr} onChange={value => updateRiskField('rr', value)} onStep={direction => stepRiskField('rr', direction)} stepLabel="+/- 0.1" />
         </div>
 
         <button className="primaryBtn fullBtn" onClick={sendRiskSettings} disabled={Boolean(busy)}>
@@ -499,12 +597,12 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
         </div>
 
         <div className="settingsGrid">
-          <label>PC1 %<input inputMode="decimal" value={pc.pc1} onChange={e => setPc({ ...pc, pc1: e.target.value })} /></label>
-          <label>PC2 %<input inputMode="decimal" value={pc.pc2} onChange={e => setPc({ ...pc, pc2: e.target.value })} /></label>
-          <label>PC3 %<input inputMode="decimal" value={pc.pc3} onChange={e => setPc({ ...pc, pc3: e.target.value })} /></label>
+          <StepperInput label="PC1 %" value={pc.pc1} onChange={value => updatePcField('pc1', value)} onStep={direction => stepPcField('pc1', direction)} stepLabel="+/- 1" />
+          <StepperInput label="PC2 %" value={pc.pc2} onChange={value => updatePcField('pc2', value)} onStep={direction => stepPcField('pc2', direction)} stepLabel="+/- 1" />
+          <StepperInput label="PC3 %" value={pc.pc3} onChange={value => updatePcField('pc3', value)} onStep={direction => stepPcField('pc3', direction)} stepLabel="+/- 1" />
         </div>
 
-        <button className="ghostBtn fullBtn" onClick={() => cmd(ACTIONS.SET_PARTIALS, { pc1: Number(pc.pc1), pc2: Number(pc.pc2), pc3: Number(pc.pc3) })} disabled={Boolean(busy)}>
+        <button className="ghostBtn fullBtn" onClick={sendPartialSettings} disabled={Boolean(busy)}>
           Send Partial Settings
         </button>
       </div>
@@ -611,6 +709,79 @@ function CommandsLog({ commands }) {
   )
 }
 
+function TradeHistoryPage({ state }) {
+  const s = state?.state || {}
+  const currency = s.currency || ''
+  const rows = Array.isArray(s.tradeHistory) ? s.tradeHistory : []
+  const totals = rows.reduce((acc, row) => {
+    const profit = Number(row.profit)
+    if (Number.isFinite(profit)) {
+      acc.net += profit
+      if (profit > 0) acc.wins += 1
+      if (profit < 0) acc.losses += 1
+    }
+    return acc
+  }, { net: 0, wins: 0, losses: 0 })
+
+  return (
+    <section className="historyPage">
+      <div className="historySummary">
+        <div className="glass historyMetric"><span>Total Trades</span><strong>{rows.length}</strong></div>
+        <div className="glass historyMetric"><span>Wins</span><strong className="pos">{totals.wins}</strong></div>
+        <div className="glass historyMetric"><span>Losses</span><strong className="neg">{totals.losses}</strong></div>
+        <div className="glass historyMetric"><span>Net P/L</span><strong className={clsPL(totals.net)}>{money(totals.net, currency)}</strong></div>
+      </div>
+
+      <section className="glass panel">
+        <div className="panelHeader">
+          <div className="panelIcon"><History /></div>
+          <div>
+            <p className="sectionEyebrow">Trade History</p>
+            <h2>Closed Trades</h2>
+          </div>
+        </div>
+
+        {rows.length ? (
+          <div className="historyTableWrap">
+            <table className="historyTable">
+              <thead>
+                <tr>
+                  <th>Close Time</th>
+                  <th>Type</th>
+                  <th>Lot</th>
+                  <th>Entry</th>
+                  <th>Exit</th>
+                  <th>SL</th>
+                  <th>Target</th>
+                  <th>Profit/Loss</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, index) => (
+                  <tr key={row.id || `${row.positionId || 'trade'}-${index}`}>
+                    <td data-label="Close Time">{formatHistoryTime(row.closeTime || row.closeTimeSec)}</td>
+                    <td data-label="Type"><span className={`sidePill ${row.type === 'BUY' ? 'buy' : 'sell'}`}>{row.type || '--'}</span></td>
+                    <td data-label="Lot">{n(row.volume, 2)}</td>
+                    <td data-label="Entry">{row.entryPrice ?? '--'}</td>
+                    <td data-label="Exit">{row.exitPrice ?? '--'}</td>
+                    <td data-label="SL">{row.sl ?? '--'}</td>
+                    <td data-label="Target">{row.tp ?? '--'}</td>
+                    <td data-label="Profit/Loss"><strong className={clsPL(row.profit)}>{money(row.profit, currency)}</strong></td>
+                    <td data-label="Reason">{row.reason || '--'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="emptyState">No closed trade history from EA yet.</div>
+        )}
+      </section>
+    </section>
+  )
+}
+
 function Dashboard({ session }) {
   const [instances, setInstances] = useState([])
   const [selectedId, setSelectedId] = useState('')
@@ -619,6 +790,7 @@ function Dashboard({ session }) {
   const [showSetup, setShowSetup] = useState(false)
   const [lastSyncAt, setLastSyncAt] = useState(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [view, setView] = useState('dashboard')
   const pollingRef = useRef(false)
 
   const selected = useMemo(() => instances.find(x => x.id === selectedId), [instances, selectedId])
@@ -726,13 +898,21 @@ function Dashboard({ session }) {
         onNewEa={() => setShowSetup(true)}
         lastSyncAt={lastSyncAt}
         isRefreshing={isRefreshing}
+        view={view}
+        setView={setView}
       />
-      <StatusHero state={state} selected={selected} />
-      <StatCards state={state} />
-      <CommandPanel session={session} selected={selected} state={state} reloadCommands={() => loadCommands(selectedId)} />
-      <PositionPanel state={state} />
-      <StructurePanel state={state} />
-      <CommandsLog commands={commands} />
+      {view === 'history' ? (
+        <TradeHistoryPage state={state} />
+      ) : (
+        <>
+          <StatusHero state={state} selected={selected} />
+          <StatCards state={state} />
+          <CommandPanel session={session} selected={selected} state={state} reloadCommands={() => loadCommands(selectedId)} />
+          <PositionPanel state={state} />
+          <StructurePanel state={state} />
+          <CommandsLog commands={commands} />
+        </>
+      )}
       <div className="footer"><Lock size={14} /> Each user sees only their own EAs via Supabase RLS. EA commands are verified by EA ID and private token.</div>
     </main>
   )
