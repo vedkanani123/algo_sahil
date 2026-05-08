@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { hasSupabaseConfig, supabase, functionsUrl } from './supabaseClient.js'
+import { hasSupabaseConfig, supabase, functionsUrl, SUPABASE_ANON_KEY } from './supabaseClient.js'
 import './styles.css'
 import {
   Activity,
@@ -8,11 +8,14 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   BarChart3,
+  Bell,
   CheckCircle2,
   CircleDot,
   Clock3,
   Copy,
   Database,
+  Eye,
+  EyeOff,
   Gauge,
   History,
   KeyRound,
@@ -27,12 +30,14 @@ import {
   Radio,
   RefreshCw,
   Save,
+  Send,
   Server,
   Settings2,
   Shield,
   SlidersHorizontal,
   Sparkles,
   Terminal,
+  Trash2,
   WalletCards,
   Wifi,
   WifiOff,
@@ -55,6 +60,24 @@ const ACTIONS = {
   SET_PARTIALS: 'SET_PARTIALS',
   PING: 'PING'
 }
+
+const TELEGRAM_PREFS = [
+  ['trade_open', 'Trade Open'],
+  ['sl_hit', 'SL Hit'],
+  ['tp_hit', 'TP Hit'],
+  ['rr1_hit', '1:1 Hit'],
+  ['rr2_hit', '1:2 Hit'],
+  ['rr3_hit', '1:3 Hit'],
+  ['partial_hit', 'Partial Close'],
+  ['command_sent', 'Command Sent'],
+  ['command_done', 'Command Done'],
+  ['command_failed', 'Command Failed'],
+  ['ea_message', 'EA Message'],
+  ['ea_online', 'EA Online'],
+  ['ea_offline', 'EA Offline']
+]
+
+const DEFAULT_TELEGRAM_PREFS = TELEGRAM_PREFS.reduce((acc, [key]) => ({ ...acc, [key]: true }), {})
 
 function n(v, d = 2) {
   const x = Number(v)
@@ -293,6 +316,7 @@ function MissingConfig() {
 
 function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, lastSyncAt, isRefreshing, view, setView }) {
   const [isEditing, setIsEditing] = useState(false)
+  const [showEmail, setShowEmail] = useState(false)
   const [editName, setEditName] = useState('')
   const [editSymbol, setEditSymbol] = useState('')
 
@@ -322,7 +346,14 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
           <div className="logo"><Zap size={22} /></div>
           <div className="brandText">
             <h2>TCX Pro</h2>
-            <span>{user?.email || 'Supabase MT5 Controller'}</span>
+            <div className="emailPrivacy">
+              <span>{showEmail ? user?.email || 'Supabase MT5 Controller' : 'Email hidden'}</span>
+              {user?.email && (
+                <button type="button" onClick={() => setShowEmail(v => !v)} title={showEmail ? 'Hide email' : 'Show email'} aria-label={showEmail ? 'Hide email' : 'Show email'}>
+                  {showEmail ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -349,6 +380,7 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
         <div className="viewToggle" role="group" aria-label="Dashboard view">
           <button className={view === 'dashboard' ? 'active' : ''} onClick={() => setView('dashboard')} title="Dashboard"><Activity size={16} /> Dashboard</button>
           <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')} title="Trade history"><History size={16} /> Trades</button>
+          <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')} title="Settings"><Settings2 size={16} /> Settings</button>
         </div>
         <div className="syncBadge" title="Dashboard polls live data every 1 second">
           <span className="liveDot" />
@@ -709,6 +741,252 @@ function CommandsLog({ commands }) {
   )
 }
 
+function TelegramSettingsPage({ session }) {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [chatLoading, setChatLoading] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+  const [hasToken, setHasToken] = useState(false)
+  const [botUsername, setBotUsername] = useState('')
+  const [savedMeta, setSavedMeta] = useState({ connected_at: null, updated_at: null })
+  const [form, setForm] = useState({
+    enabled: false,
+    bot_token: '',
+    chat_id: '',
+    prefs: DEFAULT_TELEGRAM_PREFS
+  })
+
+  const authHeaders = useMemo(() => ({
+    'Content-Type': 'application/json',
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${session.access_token}`
+  }), [session.access_token])
+
+  const loadSettings = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`${functionsUrl}/telegram-settings`, { headers: authHeaders })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.ok) throw new Error(json.error || 'Unable to load Telegram settings')
+      const s = json.settings || {}
+      setHasToken(Boolean(s.has_token))
+      setBotUsername(s.bot_username || '')
+      setSavedMeta({ connected_at: s.connected_at || null, updated_at: s.updated_at || null })
+      setForm({
+        enabled: Boolean(s.enabled),
+        bot_token: '',
+        chat_id: s.chat_id || '',
+        prefs: { ...DEFAULT_TELEGRAM_PREFS, ...(s.prefs || {}) }
+      })
+    } catch (e) {
+      setError(String(e.message || e))
+    } finally {
+      setLoading(false)
+    }
+  }, [authHeaders])
+
+  useEffect(() => { loadSettings() }, [loadSettings])
+
+  function setPref(key, value) {
+    setForm(current => ({ ...current, prefs: { ...current.prefs, [key]: value } }))
+  }
+
+  async function saveSettings(test = false) {
+    setSaving(true)
+    setNotice('')
+    setError('')
+    try {
+      const res = await fetch(`${functionsUrl}/telegram-settings`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          enabled: test ? true : form.enabled,
+          bot_token: form.bot_token.trim() || undefined,
+          chat_id: form.chat_id.trim(),
+          prefs: form.prefs,
+          test
+        })
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.ok) throw new Error(json.error || 'Unable to save Telegram settings')
+      const s = json.settings || {}
+      setHasToken(Boolean(s.has_token))
+      setBotUsername(s.bot_username || botUsername)
+      setSavedMeta({ connected_at: s.connected_at || null, updated_at: s.updated_at || null })
+      setForm(current => ({ ...current, enabled: Boolean(s.enabled), bot_token: '', chat_id: s.chat_id || current.chat_id, prefs: { ...DEFAULT_TELEGRAM_PREFS, ...(s.prefs || current.prefs) } }))
+      setNotice(test ? 'Telegram saved and test message sent.' : 'Telegram settings saved.')
+    } catch (e) {
+      setError(String(e.message || e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function getChatId() {
+    setChatLoading(true)
+    setNotice('')
+    setError('')
+    try {
+      const res = await fetch(`${functionsUrl}/telegram-chat-id`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ bot_token: form.bot_token.trim() || undefined })
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.ok) throw new Error(json.error || 'Unable to get Telegram chat ID')
+      setBotUsername(json.bot_username || botUsername)
+      const chatId = json.chat?.id || form.chat_id
+      setForm(current => ({ ...current, enabled: true, chat_id: chatId }))
+
+      const saveRes = await fetch(`${functionsUrl}/telegram-settings`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          enabled: true,
+          bot_token: form.bot_token.trim() || undefined,
+          chat_id: chatId,
+          prefs: form.prefs,
+          test: false
+        })
+      })
+      const saveJson = await saveRes.json().catch(() => ({}))
+      if (!saveRes.ok || !saveJson.ok) throw new Error(saveJson.error || 'Chat ID detected but could not be saved')
+      const s = saveJson.settings || {}
+      setHasToken(Boolean(s.has_token))
+      setSavedMeta({ connected_at: s.connected_at || null, updated_at: s.updated_at || null })
+      setForm(current => ({ ...current, enabled: Boolean(s.enabled), bot_token: '', chat_id: s.chat_id || chatId, prefs: { ...DEFAULT_TELEGRAM_PREFS, ...(s.prefs || current.prefs) } }))
+      setNotice(`Chat ID detected and saved${json.chat?.username ? ` for @${json.chat.username}` : ''}.`)
+    } catch (e) {
+      setError(String(e.message || e))
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
+  async function disconnect() {
+    if (!window.confirm('Disconnect Telegram alerts?')) return
+    setSaving(true)
+    setNotice('')
+    setError('')
+    try {
+      const res = await fetch(`${functionsUrl}/telegram-settings`, { method: 'DELETE', headers: authHeaders })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.ok) throw new Error(json.error || 'Unable to disconnect Telegram')
+      setHasToken(false)
+      setBotUsername('')
+      setSavedMeta({ connected_at: null, updated_at: null })
+      setForm({ enabled: false, bot_token: '', chat_id: '', prefs: DEFAULT_TELEGRAM_PREFS })
+      setNotice('Telegram disconnected.')
+    } catch (e) {
+      setError(String(e.message || e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <section className="glass panel">
+        <div className="emptyState">Loading Telegram settings...</div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="settingsPage">
+      <div className="glass panel telegramPanel">
+        <div className="panelHeader settingsHeader">
+          <div className="panelIcon"><Bell /></div>
+          <div>
+            <p className="sectionEyebrow">Alerts</p>
+            <h2>Telegram Settings</h2>
+          </div>
+          <div className={`telegramStatus ${form.enabled ? 'connected' : ''}`}>
+            {form.enabled ? 'Connected' : 'Disabled'}
+          </div>
+        </div>
+
+        <div className="telegramGrid">
+          {(hasToken || form.chat_id || botUsername) && (
+            <div className="telegramSavedBox">
+              <div><span>Bot Token</span><strong>{hasToken ? 'Saved securely' : 'Not saved'}</strong></div>
+              <div><span>Chat ID</span><strong>{form.chat_id || 'Not set'}</strong></div>
+              <div><span>Bot</span><strong>{botUsername ? `@${botUsername}` : 'Not checked'}</strong></div>
+              <div><span>Updated</span><strong>{formatClock(savedMeta.updated_at)}</strong></div>
+            </div>
+          )}
+
+          <label className="toggleLine">
+            <input type="checkbox" checked={form.enabled} onChange={e => setForm(current => ({ ...current, enabled: e.target.checked }))} />
+            <span>Enable Telegram Alerts</span>
+          </label>
+
+          <label>
+            Telegram Bot Token
+            <input
+              type="password"
+              value={form.bot_token}
+              onChange={e => setForm(current => ({ ...current, bot_token: e.target.value }))}
+              placeholder={hasToken ? 'Token saved - paste new token to replace' : '123456789:AA...'}
+              autoComplete="off"
+            />
+          </label>
+
+          <label>
+            Telegram Chat ID
+            <div className="chatIdRow">
+              <input
+                value={form.chat_id}
+                onChange={e => setForm(current => ({ ...current, chat_id: e.target.value }))}
+                placeholder="Press Start in your bot, then get chat ID"
+              />
+              <button className="ghostBtn" onClick={getChatId} disabled={chatLoading || (!form.bot_token.trim() && !hasToken)}>
+                <Send size={16} /> {chatLoading ? 'Checking...' : 'Get Chat ID'}
+              </button>
+            </div>
+          </label>
+
+          {botUsername && <div className="telegramBotLine">Bot: @{botUsername}</div>}
+          {notice && <div className="notice">{notice}</div>}
+          {error && <div className="notice errorNotice">{error}</div>}
+
+          <div className="telegramActions">
+            <button className="primaryBtn" onClick={() => saveSettings(true)} disabled={saving}>
+              <Send size={16} /> {saving ? 'Saving...' : 'Save & Test'}
+            </button>
+            <button className="ghostBtn" onClick={() => saveSettings(false)} disabled={saving}>
+              <Save size={16} /> Save
+            </button>
+            <button className="ghostBtn dangerGhost" onClick={disconnect} disabled={saving || (!hasToken && !form.chat_id)}>
+              <Trash2 size={16} /> Disconnect
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="glass panel telegramPanel">
+        <div className="panelHeader">
+          <div className="panelIcon"><Settings2 /></div>
+          <div>
+            <p className="sectionEyebrow">Preferences</p>
+            <h2>Message Types</h2>
+          </div>
+        </div>
+        <div className="prefGrid">
+          {TELEGRAM_PREFS.map(([key, label]) => (
+            <label className="prefItem" key={key}>
+              <input type="checkbox" checked={form.prefs[key] !== false} onChange={e => setPref(key, e.target.checked)} />
+              <span>{label}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function TradeHistoryPage({ state }) {
   const s = state?.state || {}
   const currency = s.currency || ''
@@ -901,7 +1179,9 @@ function Dashboard({ session }) {
         view={view}
         setView={setView}
       />
-      {view === 'history' ? (
+      {view === 'settings' ? (
+        <TelegramSettingsPage session={session} />
+      ) : view === 'history' ? (
         <TradeHistoryPage state={state} />
       ) : (
         <>

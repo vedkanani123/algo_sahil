@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { notifyCommandCreated } from '../_shared/telegram.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -34,7 +35,7 @@ Deno.serve(async (req) => {
       safePayload = { ...safePayload, lot, risk, rr }
     }
 
-    const { data: ea, error: eaErr } = await admin.from('ea_instances').select('id,user_id,enabled').eq('id', ea_id).eq('user_id', userData.user.id).single()
+    const { data: ea, error: eaErr } = await admin.from('ea_instances').select('id,user_id,enabled,name,symbol').eq('id', ea_id).eq('user_id', userData.user.id).single()
     if (eaErr || !ea || !ea.enabled) return json({ ok:false, error:'EA not found or disabled' }, 404)
 
     const { data, error } = await admin.from('commands').insert({
@@ -48,6 +49,11 @@ Deno.serve(async (req) => {
     }).select().single()
     if (error) throw error
     await admin.from('audit_logs').insert({ user_id:userData.user.id, ea_id, action:'create_command', details:{ command_id:data.id, action } })
+    try {
+      await notifyCommandCreated(admin, data, ea)
+    } catch (notifyErr) {
+      console.error('telegram command notification failed', notifyErr)
+    }
     return json({ ok:true, command:data })
   } catch (e) {
     return json({ ok:false, error:String((e as Error)?.message || e) }, 500)

@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { notifyCommandAck } from '../_shared/telegram.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -29,11 +30,18 @@ Deno.serve(async (req) => {
     const { ea_id, ea_token, command_id, status, message = '' } = await req.json()
     const ea = await verifyEA(admin, ea_id, ea_token)
     if (!['done','failed'].includes(status)) return json({ ok:false, error:'Invalid status' }, 400)
-    const { error } = await admin.from('commands')
+    const { data: command, error } = await admin.from('commands')
       .update({ status, done_at: new Date().toISOString(), result_message: String(message).slice(0, 500) })
       .eq('id', command_id)
       .eq('ea_id', ea.id)
+      .select('id,user_id,ea_id,action,payload,status,result_message')
+      .single()
     if (error) throw error
+    try {
+      await notifyCommandAck(admin, command, String(message).slice(0, 500))
+    } catch (notifyErr) {
+      console.error('telegram command ack notification failed', notifyErr)
+    }
     return json({ ok:true })
   } catch (e) {
     return json({ ok:false, error:String((e as Error)?.message || e) }, 401)

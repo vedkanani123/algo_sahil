@@ -27,13 +27,18 @@ Install Supabase CLI first.
 supabase login
 supabase link --project-ref YOUR_PROJECT_REF
 supabase secrets set SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+supabase secrets set TELEGRAM_TOKEN_ENCRYPTION_KEY=LONG_RANDOM_SECRET_AT_LEAST_16_CHARS
 supabase functions deploy create-command
 supabase functions deploy ea-next-command --no-verify-jwt
 supabase functions deploy ea-ack-command --no-verify-jwt
 supabase functions deploy ea-post-state --no-verify-jwt
+supabase functions deploy telegram-settings --no-verify-jwt
+supabase functions deploy telegram-chat-id --no-verify-jwt
+supabase functions deploy telegram-offline-monitor --no-verify-jwt
 ```
 
 The three EA functions use EA ID + EA token, so deploy them with `--no-verify-jwt`.
+The Telegram settings functions are also deployed with `--no-verify-jwt` so browser CORS preflight requests can pass. They still verify the signed-in website user inside the function with `admin.auth.getUser(jwt)`. The offline monitor is intended for a scheduled call and does not change the EA file.
 
 ## 3. Run website locally
 
@@ -123,3 +128,19 @@ Website ARM BUY -> Supabase command row -> EA polls `ea-next-command` -> EA call
 8. Check Experts tab in MT5 and command log in website.
 
 Use demo first. Do not use live until the command log, state updates, close, BE, and partial commands all work.
+
+## Telegram alerts
+
+Telegram alerts are configured per website user. Each user adds their own Telegram bot token and chat ID in `Settings -> Telegram Settings`.
+
+User setup:
+
+1. Open Telegram and create a bot with `@BotFather`.
+2. Copy the bot token into the website Telegram settings.
+3. Open the new bot in Telegram and press Start.
+4. Click `Get Chat ID` in the website.
+5. Click `Save & Test`.
+
+Alerts are sent from Supabase Edge Functions, not from the EA file. The bot token is encrypted with `TELEGRAM_TOKEN_ENCRYPTION_KEY` before it is stored.
+
+To send EA offline alerts, schedule `telegram-offline-monitor` to run every minute. It sends one offline alert per offline transition when `last_seen_at` is older than 60 seconds.

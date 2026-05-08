@@ -463,7 +463,8 @@ code,
   letter-spacing: 0;
 }
 
-.brandText span {
+.brandText > span,
+.emailPrivacy span {
   display: block;
   max-width: 240px;
   overflow: hidden;
@@ -472,6 +473,34 @@ code,
   white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
+}
+
+.emailPrivacy {
+  display: grid;
+  grid-template-columns: minmax(0, auto) auto;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.emailPrivacy button {
+  width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.emailPrivacy button:hover {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+
+.emailPrivacy button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .topbarSelect {
@@ -499,7 +528,7 @@ code,
 
 .viewToggle {
   display: inline-grid;
-  grid-template-columns: repeat(2, minmax(0, auto));
+  grid-template-columns: repeat(3, minmax(0, auto));
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--border);
@@ -1131,6 +1160,129 @@ code,
   min-height: 58px;
 }
 
+.settingsPage {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.settingsHeader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.telegramStatus {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.telegramStatus.connected {
+  color: #2fe09a;
+  background: rgba(24, 160, 88, 0.12);
+  border-color: rgba(24, 160, 88, 0.28);
+}
+
+.telegramGrid {
+  display: grid;
+  gap: 16px;
+}
+
+.telegramSavedBox {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(19, 184, 164, 0.24);
+  background: rgba(19, 184, 164, 0.08);
+}
+
+.telegramSavedBox div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.telegramSavedBox span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.telegramSavedBox strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.toggleLine,
+.prefItem {
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.toggleLine input,
+.prefItem input {
+  width: 18px;
+  min-height: 18px;
+  accent-color: var(--accent-strong);
+}
+
+.chatIdRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.telegramBotLine {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(19, 184, 164, 0.24);
+  background: rgba(19, 184, 164, 0.08);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.telegramActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dangerGhost {
+  color: #ff8181;
+  background: rgba(223, 75, 75, 0.08);
+  border-color: rgba(223, 75, 75, 0.22);
+}
+
+.prefGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .historyPage {
   display: grid;
   gap: 18px;
@@ -1233,7 +1385,8 @@ code,
   }
 
   .mainLayout,
-  .structureContainer {
+  .structureContainer,
+  .settingsPage {
     grid-template-columns: 1fr;
   }
 }
@@ -1278,7 +1431,7 @@ code,
   }
 
   .viewToggle {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .hero {
@@ -1315,7 +1468,10 @@ code,
   .miniBtns,
   .dangerZone,
   .settingsGrid,
-  .modeToggle {
+  .modeToggle,
+  .prefGrid,
+  .chatIdRow,
+  .telegramSavedBox {
     grid-template-columns: 1fr;
   }
 
