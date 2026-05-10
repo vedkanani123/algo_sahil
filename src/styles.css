@@ -505,7 +505,7 @@ code,
 
 .topbarSelect {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   min-width: 0;
 }
@@ -945,7 +945,7 @@ code,
 
 .modeToggle {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
   padding: 6px;
   margin: 14px 0;
@@ -968,10 +968,33 @@ code,
   border: 1px solid var(--border-strong);
 }
 
+.modeToggle button.successToggle.active {
+  background: rgba(24, 160, 88, 0.16);
+  color: #2fe09a;
+  border-color: rgba(24, 160, 88, 0.42);
+}
+
+.inlineStatus {
+  margin: -4px 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .positionPanel {
   margin-bottom: 18px;
 }
 
+.positionList {
+  display: grid;
+  gap: 10px;
+}
+
+.positionRow,
 .positionGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));

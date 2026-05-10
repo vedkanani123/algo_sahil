@@ -55,6 +55,7 @@ const ACTIONS = {
   BREAK_EVEN: 'BREAK_EVEN',
   CLOSE_ALL: 'CLOSE_ALL',
   TOGGLE_PARTIALS: 'TOGGLE_PARTIALS',
+  TOGGLE_SECOND_ENTRY: 'TOGGLE_SECOND_ENTRY',
   SET_MODE: 'SET_MODE',
   SET_RISK: 'SET_RISK',
   SET_PARTIALS: 'SET_PARTIALS',
@@ -108,7 +109,7 @@ function clsPL(v) {
 
 function statusClass(state) {
   if (!state) return 'idle'
-  if (state.status === 'POSITION OPEN') return 'position'
+  if (state.position?.hasPosition || String(state.status || '').includes('POSITION')) return 'position'
   if (state.arm === 'BUY') return 'buy'
   if (state.arm === 'SELL') return 'sell'
   if (state.arm === 'AUTO') return 'auto'
@@ -314,7 +315,7 @@ function MissingConfig() {
   )
 }
 
-function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, lastSyncAt, isRefreshing, view, setView }) {
+function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, onDeleteEa, lastSyncAt, isRefreshing, view, setView }) {
   const [isEditing, setIsEditing] = useState(false)
   const [showEmail, setShowEmail] = useState(false)
   const [editName, setEditName] = useState('')
@@ -371,6 +372,7 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
                 {instances.map(x => <option key={x.id} value={x.id}>{x.name} {x.symbol ? `- ${x.symbol}` : ''}</option>)}
               </select>
               <button className="ghostBtn iconTextBtn" onClick={() => setIsEditing(true)} title="Edit EA"><Pencil size={16} /> Edit</button>
+              <button className="ghostBtn dangerGhost iconTextBtn" onClick={onDeleteEa} title="Delete EA"><Trash2 size={16} /> Delete</button>
             </>
           )}
         </div>
@@ -422,8 +424,11 @@ function StatusHero({ state, selected }) {
 
         <div className="chips">
           <div className="chip">Arm <b>{s.arm || 'OFF'}</b></div>
+          <div className="chip">Positions <b>{s.position?.count ?? (s.position?.hasPosition ? 1 : 0)}</b></div>
           <div className="chip">TF <b>{s.period || '--'}</b></div>
           <div className="chip">Spread <b>{s.spread ?? '--'}</b></div>
+          <div className="chip">SL/TP Space <b>{s.spreadProtectionPoints ?? 0}</b></div>
+          <div className="chip">2nd <b>{s.secondEntryOn ? 'ON' : 'OFF'}</b></div>
           <div className="chip">Quality <b>{s.qualityText || '--'}</b></div>
         </div>
       </div>
@@ -508,7 +513,7 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
     }
   }, [state?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, riskDirty, pcDirty, pendingRisk, pendingPc])
 
-  async function cmd(action, payload = {}) {
+  async function cmd(action, payload = {}, options = {}) {
     if (!selected?.id) return alert('Create/select EA first')
     setBusy(action)
     try {
@@ -519,7 +524,7 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.ok) {
-        alert(json.error || 'Command failed')
+        if (!options.silent) alert(json.error || 'Command failed')
         return false
       }
       reloadCommands?.()
@@ -574,6 +579,20 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
     if (ok) setPendingPc(next)
   }
 
+  async function toggleSecondEntry() {
+    const nextOn = !s.secondEntryOn
+    const directOk = await cmd(ACTIONS.TOGGLE_SECOND_ENTRY, {}, { silent: true })
+    if (directOk) return
+
+    const fallback = {
+      pc1: clampNumber(pc.pc1, 0, 100),
+      pc2: clampNumber(pc.pc2, 0, 100),
+      pc3: clampNumber(pc.pc3, 0, 100),
+      secondEntryOn: nextOn
+    }
+    await cmd(ACTIONS.SET_PARTIALS, fallback)
+  }
+
   return (
     <section className="mainLayout">
       <div className="glass panel controlPanel">
@@ -625,8 +644,11 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
         <div className="modeToggle" role="group" aria-label="EA mode controls">
           <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'safe' })} className={!s.advanced ? 'active' : ''} disabled={Boolean(busy)}>Safe</button>
           <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'advanced' })} className={s.advanced ? 'active' : ''} disabled={Boolean(busy)}>Advanced</button>
-          <button onClick={() => cmd(ACTIONS.TOGGLE_PARTIALS)} className={s.partialsOn ? 'active' : ''} disabled={Boolean(busy)}>Partials {s.partialsOn ? 'ON' : 'OFF'}</button>
+          <button onClick={() => cmd(ACTIONS.TOGGLE_PARTIALS)} className={s.partialsOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>Partials {s.partialsOn ? 'ON' : 'OFF'}</button>
+          <button onClick={toggleSecondEntry} className={s.secondEntryOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>2nd {s.secondEntryOn ? 'ON' : 'OFF'}</button>
         </div>
+
+        <div className="inlineStatus">{s.secondEntryStatus || '2nd entry OFF'}</div>
 
         <div className="settingsGrid">
           <StepperInput label="PC1 %" value={pc.pc1} onChange={value => updatePcField('pc1', value)} onStep={direction => stepPcField('pc1', direction)} stepLabel="+/- 1" />
@@ -645,6 +667,7 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
 function PositionPanel({ state }) {
   const s = state?.state || {}
   const p = s.position || {}
+  const positions = Array.isArray(p.positions) && p.positions.length ? p.positions : (p.hasPosition ? [p] : [])
 
   return (
     <section className="glass panel positionPanel">
@@ -652,21 +675,25 @@ function PositionPanel({ state }) {
         <div className="panelIcon"><Gauge /></div>
         <div>
           <p className="sectionEyebrow">Position</p>
-          <h2>Live Position</h2>
+          <h2>{positions.length > 1 ? 'Live Positions' : 'Live Position'}</h2>
         </div>
       </div>
 
-      {!p.hasPosition ? (
+      {!positions.length ? (
         <div className="emptyState">No matching open position.</div>
       ) : (
-        <div className="positionGrid">
-          <div className="posItem"><span>Type</span><strong className={p.type === 'BUY' ? 'pos' : 'neg'}>{p.type}</strong></div>
-          <div className="posItem"><span>Volume</span><strong>{p.volume}</strong></div>
-          <div className="posItem"><span>RR</span><strong>{n(p.rr)}R</strong></div>
-          <div className="posItem"><span>P/L</span><strong className={clsPL(p.profit)}>{money(p.profit, s.currency)}</strong></div>
-          <div className="posItem"><span>Entry</span><strong>{p.entry}</strong></div>
-          <div className="posItem"><span>SL</span><strong>{p.sl}</strong></div>
-          <div className="posItem"><span>TP</span><strong>{p.tp}</strong></div>
+        <div className="positionList">
+          {positions.map((pos, index) => (
+            <div className="positionRow" key={pos.ticket || `${pos.type}-${index}`}>
+              <div className="posItem"><span>Type</span><strong className={pos.type === 'BUY' ? 'pos' : 'neg'}>{pos.type}</strong></div>
+              <div className="posItem"><span>Volume</span><strong>{pos.volume}</strong></div>
+              <div className="posItem"><span>RR</span><strong>{n(pos.rr)}R</strong></div>
+              <div className="posItem"><span>P/L</span><strong className={clsPL(pos.profit)}>{money(pos.profit, s.currency)}</strong></div>
+              <div className="posItem"><span>Entry</span><strong>{pos.entry}</strong></div>
+              <div className="posItem"><span>SL</span><strong>{pos.sl}</strong></div>
+              <div className="posItem"><span>TP</span><strong>{pos.tp}</strong></div>
+            </div>
+          ))}
         </div>
       )}
     </section>
@@ -1103,6 +1130,31 @@ function Dashboard({ session }) {
     }
   }, [loadCommands, loadInstances, loadState])
 
+  const deleteSelectedEa = useCallback(async () => {
+    if (!selectedId) return
+    const target = instances.find(x => x.id === selectedId)
+    const label = target ? `${target.name}${target.symbol ? ` - ${target.symbol}` : ''}` : 'this EA'
+    if (!window.confirm(`Delete ${label}? This removes its live state and command history from the dashboard.`)) return
+
+    const { error } = await supabase
+      .from('ea_instances')
+      .delete()
+      .eq('id', selectedId)
+      .eq('user_id', session.user.id)
+
+    if (error) {
+      alert(error.message)
+      return
+    }
+
+    const remaining = instances.filter(x => x.id !== selectedId)
+    setInstances(remaining)
+    setSelectedId(remaining[0]?.id || '')
+    setState(null)
+    setCommands([])
+    loadInstances()
+  }, [instances, loadInstances, selectedId, session.user.id])
+
   useEffect(() => { loadInstances() }, [loadInstances])
 
   useEffect(() => {
@@ -1174,6 +1226,7 @@ function Dashboard({ session }) {
         setSelectedId={setSelectedId}
         refresh={refresh}
         onNewEa={() => setShowSetup(true)}
+        onDeleteEa={deleteSelectedEa}
         lastSyncAt={lastSyncAt}
         isRefreshing={isRefreshing}
         view={view}
