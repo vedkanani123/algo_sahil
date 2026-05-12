@@ -131,20 +131,20 @@ const FUNDING_PIPS_RULES = {
   one_step: {
     id: 'one_step',
     label: '1 Step Model',
-    summary: 'Single Student phase, then Master account.',
+    summary: 'Single evaluation phase, then Live account.',
     source: 'FundingPips Help Center - 1 Step Model',
     accountSizes: FUNDING_PIPS_STANDARD_SIZES,
     phases: [
-      { label: 'Student', target: 10, days: 3 },
-      { label: 'Master', target: null, days: null }
+      { label: 'Phase 1', target: 10, days: 3 },
+      { label: 'Live', target: null, days: null }
     ],
     dailyLossPct: 3,
     maxLossPct: 6,
     maxLossLabel: 'Maximum Loss',
     consistencyPct: 35,
-    consistencyScope: 'On Demand Master rewards',
+    consistencyScope: 'On Demand Live rewards',
     rewardText: 'On Demand 90%, Weekly 60%, Bi-Weekly 80%, Monthly 100%.',
-    news: 'Evaluation has no news holding restriction. Master account cannot open or close within 5 minutes before or after high-impact news on affected instruments.',
+    news: 'Evaluation has no news holding restriction. Live account cannot open or close within 5 minutes before or after high-impact news on affected instruments.',
     weekend: 'Temporary master rule: weekend holding is not allowed; open trades may be closed by the system.',
     leverage: COMMON_FP_RULES.leverage,
     commissions: COMMON_FP_RULES.commissions
@@ -152,22 +152,22 @@ const FUNDING_PIPS_RULES = {
   two_step: {
     id: 'two_step',
     label: '2 Step Model',
-    summary: 'Student and Practitioner evaluation phases, then Master account.',
+    summary: 'Two evaluation phases, then Live account.',
     source: 'FundingPips Help Center - 2 Step Model',
     accountSizes: FUNDING_PIPS_STANDARD_SIZES,
     phases: [
-      { label: 'Student Option 1', target: 8, days: 3 },
-      { label: 'Student Option 2', target: 10, days: 3 },
-      { label: 'Practitioner', target: 5, days: 3 },
-      { label: 'Master', target: null, days: null }
+      { label: 'Phase 1 - 8%', target: 8, days: 3 },
+      { label: 'Phase 1 - 10%', target: 10, days: 3 },
+      { label: 'Phase 2', target: 5, days: 3 },
+      { label: 'Live', target: null, days: null }
     ],
     dailyLossPct: 5,
     maxLossPct: 10,
     maxLossLabel: 'Maximum Loss',
     consistencyPct: 35,
-    consistencyScope: 'On Demand Master rewards',
+    consistencyScope: 'On Demand Live rewards',
     rewardText: 'On Demand 90%, Weekly 60%, Bi-Weekly 80%, Monthly 100%.',
-    news: 'Evaluation has no news holding restriction. Master account cannot open or close within 5 minutes before or after high-impact news on affected instruments.',
+    news: 'Evaluation has no news holding restriction. Live account cannot open or close within 5 minutes before or after high-impact news on affected instruments.',
     weekend: 'Temporary master rule: weekend holding is not allowed; open trades may be closed by the system.',
     leverage: [
       ['Forex', '1:100', '1:30'],
@@ -185,9 +185,9 @@ const FUNDING_PIPS_RULES = {
     source: 'FundingPips Help Center - 2 Step Pro Model',
     accountSizes: FUNDING_PIPS_EXTENDED_SIZES,
     phases: [
-      { label: 'Student', target: 6, days: 1 },
-      { label: 'Practitioner', target: 6, days: 1 },
-      { label: 'Master', target: null, days: null }
+      { label: 'Phase 1', target: 6, days: 1 },
+      { label: 'Phase 2', target: 6, days: 1 },
+      { label: 'Live', target: null, days: null }
     ],
     dailyLossPct: 3,
     maxLossPct: 6,
@@ -195,30 +195,30 @@ const FUNDING_PIPS_RULES = {
     consistencyPct: 35,
     consistencyScope: 'Only when Daily Reward cycle is selected for evaluation phases',
     rewardText: 'Weekly reward cycle has no consistency rule; Daily Reward add-on adds 35% consistency during evaluation phases.',
-    news: 'Evaluation has no news holding restriction. Master account cannot open or close within 5 minutes before or after high-impact news on affected instruments.',
-    weekend: 'Weekend holding follows Master account announcements and temporary trading condition updates.',
+    news: 'Evaluation has no news holding restriction. Live account cannot open or close within 5 minutes before or after high-impact news on affected instruments.',
+    weekend: 'Weekend holding follows Live account announcements and temporary trading condition updates.',
     leverage: COMMON_FP_RULES.leverage,
     commissions: COMMON_FP_RULES.commissions
   },
   zero: {
     id: 'zero',
     label: 'FundingPips Zero',
-    summary: 'Direct Master account with trailing loss, risk, consistency, news, and weekend restrictions.',
+    summary: 'Direct Live account with trailing loss, risk, consistency, news, and weekend restrictions.',
     source: 'FundingPips Help Center - FundingPips Zero',
     accountSizes: FUNDING_PIPS_EXTENDED_SIZES,
     phases: [
-      { label: 'Master', target: null, days: null }
+      { label: 'Live', target: null, days: null }
     ],
     dailyLossPct: 3,
     trailingLossPct: 5,
     maxRiskPct: 1,
     maxLossLabel: 'Maximum Trailing Loss',
     consistencyPct: 15,
-    consistencyScope: 'Reward request on Zero Master account',
+    consistencyScope: 'Reward request on Zero Live account',
     profitableDaysRequired: 7,
     profitableDayPct: 0.25,
     rewardText: 'Bi-Weekly 95% reward split after first executed trade, with 15% consistency, 7 profitable days, 3% safety cushion, and biggest loss not exceeding biggest win.',
-    news: 'High-impact news holding is not allowed on Zero Master account.',
+    news: 'High-impact news holding is not allowed on Zero Live account.',
     weekend: 'Weekend holding is not allowed on FundingPips Zero, even with Swap Free add-on.',
     leverage: [
       ['Forex', '1:50', '1:30'],
@@ -242,7 +242,7 @@ const FUNDING_PIPS_RULES = {
     source: 'FundingPips Help Center - 1K Instant Account',
     accountSizes: [1000],
     phases: [
-      { label: 'Instant Master', target: null, days: null }
+      { label: 'Live', target: null, days: null }
     ],
     dailyLossPct: null,
     maxLossPct: null,
@@ -1779,7 +1779,7 @@ function RulesPage({ state, selected }) {
           <div className="panelIcon"><Database /></div>
           <div>
             <p className="sectionEyebrow">Dynamic Leverage</p>
-            <h2>Master Account Tier Diagram</h2>
+            <h2>Live Account Tier Diagram</h2>
           </div>
         </div>
         <div className="tierDiagram">
