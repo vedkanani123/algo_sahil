@@ -31,6 +31,7 @@ input int               InpStopBufferPoints     = 0;
 input ENUM_TC_STOP_MODE InpStopMode             = STOP_FROM_PATTERN_EXTREME;
 input bool              InpFallbackNoInitialSLTP = true;
 input bool              InpCloseIfProtectionFails = true;
+input int               InpMaxEntriesPerCycle   = 2;
 input double            InpDailyLimitR          = 2.0;
 input int               InpDailyLossLimitCount  = 2;
 
@@ -39,6 +40,9 @@ input bool              InpAllowSweep           = true;
 input bool              InpAllowSwingPattern    = true;
 input bool              InpShowSignalArrows     = true;
 input int               InpSignalLookbackBars   = 150;
+
+input group "DASHBOARD"
+input bool              InpShowManualTradesOnDashboard = true;
 
 input group "FILTERS"
 input bool              InpUseSpreadFilter      = false;
@@ -571,6 +575,85 @@ int CountOurPositions()
    return count;
 }
 
+bool IsDashboardMagic(long magic)
+{
+   return (magic==InpMagic || (InpShowManualTradesOnDashboard && magic==0));
+}
+
+bool IsManagedMagic(long magic)
+{
+   return (magic==InpMagic);
+}
+
+string DashboardSourceText(long magic)
+{
+   if(IsManagedMagic(magic))
+      return "EA";
+   if(magic==0)
+      return "Manual";
+   return "Other";
+}
+
+int CountDashboardPositions()
+{
+   int count=0;
+
+   for(int i=PositionsTotal()-1;i>=0;i--)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+
+      if(PositionGetString(POSITION_SYMBOL)==_Symbol &&
+         IsDashboardMagic((long)PositionGetInteger(POSITION_MAGIC)))
+         count++;
+   }
+
+   return count;
+}
+
+int MaxEntriesPerCycle()
+{
+   return MathMax(1,InpMaxEntriesPerCycle);
+}
+
+bool CanStartModelEntry(string &reason)
+{
+   reason="";
+   int openCount=CountOurPositions();
+   if(openCount<=0)
+      return true;
+
+   SyncSecondEntryState();
+
+   if(!g_SecondEntryOn)
+   {
+      reason="Second entry OFF - one entry mode";
+      return false;
+   }
+
+   int maxEntries=MaxEntriesPerCycle();
+   if(openCount>=maxEntries)
+   {
+      reason="Maximum "+IntegerToString(maxEntries)+" entries already open";
+      return false;
+   }
+
+   if(g_SecondEntryDone)
+   {
+      reason="Second entry already used for this trade";
+      return false;
+   }
+
+   if(g_SecondEntryBlocked)
+   {
+      reason="Second entry blocked after first trade reached "+DoubleToString(MathMax(0.1,InpSecondEntryCancelAtR),1)+"R";
+      return false;
+   }
+
+   return true;
+}
+
 bool SelectOldestOurPosition()
 {
    bool found=false;
@@ -931,15 +1014,25 @@ bool DetectPattern(int shift,bool wantBuy,PatternSignal &sig)
 
    double buffer=MathMax(0.0,(double)InpStopBufferPoints)*_Point;
 
+   bool isSwingStop=wantBuy ? buySwing : sellSwing;
+
    if(wantBuy)
    {
-      double baseSL=MathMin(c1l,MathMin(c2l,c3l));
+      double baseSL=0.0;
+      if(isSwingStop)
+         baseSL=c3l;
+      else
+         baseSL=(InpStopMode==STOP_FROM_CANDLE2_LINE ? c2l : MathMin(c1l,MathMin(c2l,c3l)));
       sig.sl=NormalizeDouble(baseSL-buffer,_Digits);
       sig.breakLevel=sig.swing ? (buySwingStrong ? c2h : c2o) : c2o;
    }
    else
    {
-      double baseSL=MathMax(c1h,MathMax(c2h,c3h));
+      double baseSL=0.0;
+      if(isSwingStop)
+         baseSL=c3h;
+      else
+         baseSL=(InpStopMode==STOP_FROM_CANDLE2_LINE ? c2h : MathMax(c1h,MathMax(c2h,c3h)));
       sig.sl=NormalizeDouble(baseSL+buffer,_Digits);
       sig.breakLevel=sig.swing ? (sellSwingStrong ? c2l : c2o) : c2o;
    }
@@ -1414,6 +1507,12 @@ bool ExecuteSignal(PatternSignal &sig)
 
    string reason="";
 
+   if(!CanStartModelEntry(reason))
+   {
+      SetLastMessage(reason,clrGold);
+      return false;
+   }
+
    if(!IsTradingAllowedForDirection(sig.buy,reason))
    {
       SetLastMessage(reason,clrTomato);
@@ -1574,6 +1673,16 @@ bool ExecuteSecondEntryFromBase(ulong baseTicket)
    }
 
    string reason="";
+   int maxEntries=MaxEntriesPerCycle();
+   if(CountOurPositions()>=maxEntries)
+   {
+      SetLastMessage("Second entry skipped - maximum "+IntegerToString(maxEntries)+" entries already open",clrGold);
+      return false;
+   }
+
+   if(g_SecondEntryDone || g_SecondEntryBlocked)
+      return false;
+
    if(!IsTradingAllowedForDirection(buy,reason))
    {
       SetLastMessage(reason,clrTomato);
@@ -1667,6 +1776,8 @@ bool ExecuteSecondEntryFromBase(ulong baseTicket)
    }
 
    g_SecondEntryDone=true;
+   SetArmMode(ARM_NONE);
+   g_AutoArm=false;
    SaveSecondEntryState();
    SetLastMessage((buy ? "BUY" : "SELL")+" second entry placed | Lot "+DoubleToString(lot,VolumeDigits())+
                   " | SL "+PriceText(baseSL)+" | TP "+PriceText(baseTP),clrLime);
@@ -1690,6 +1801,8 @@ void MonitorSecondEntry()
    if(openCount>1 && !g_SecondEntryDone)
    {
       g_SecondEntryDone=true;
+      SetArmMode(ARM_NONE);
+      g_AutoArm=false;
       SaveSecondEntryState();
       return;
    }
@@ -1707,9 +1820,18 @@ void MonitorSecondEntry()
    double cancelAt=MathMax(0.1,InpSecondEntryCancelAtR);
    if(rr>=cancelAt && !g_SecondEntryBlocked)
    {
+      string beReason="";
+      bool beOK=MoveTicketToBreakEven(g_SecondBaseTicket,beReason);
       g_SecondEntryBlocked=true;
+      SetArmMode(ARM_NONE);
+      g_AutoArm=false;
       SaveSecondEntryState();
-      SetLastMessage("Second entry blocked - first trade reached "+DoubleToString(cancelAt,1)+"R",clrGold);
+      string msg="Second entry blocked - first trade reached "+DoubleToString(cancelAt,1)+"R";
+      if(beOK)
+         msg+=(beReason=="already protected" ? " | SL already BE" : " | SL moved BE");
+      else if(beReason!="")
+         msg+=" | BE failed: "+beReason;
+      SetLastMessage(msg,beOK ? clrLime : clrGold);
       return;
    }
 
@@ -1734,6 +1856,8 @@ string SecondEntryStatusText()
       return "2nd entry OFF";
    if(!HasOurPosition())
       return "2nd entry ready";
+   if(CountOurPositions()>=MaxEntriesPerCycle())
+      return "Max "+IntegerToString(MaxEntriesPerCycle())+" entries";
    if(g_SecondEntryBlocked)
       return "2nd blocked after 2R";
    if(g_SecondEntryDone || CountOurPositions()>1)
@@ -1745,6 +1869,13 @@ void TryArmedExecution()
 {
    if(g_ArmedMode==ARM_NONE && !g_AutoArm)
       return;
+
+   string gateReason="";
+   if(!CanStartModelEntry(gateReason))
+   {
+      SetLastMessage(gateReason,clrGold);
+      return;
+   }
 
    PatternSignal sig;
    bool wantBuy=(g_ArmedMode==ARM_BUY);
@@ -1778,17 +1909,11 @@ void TryArmedExecution()
 
    SetLastMessage(signalText+" model found - sending order",clrGold);
 
-   bool keepAuto=g_AutoArm;
    if(ExecuteSignal(sig))
    {
       g_LastTradeSignalTime=sig.time;
-      if(keepAuto)
-         g_ArmedMode=ARM_NONE;
-      else
-      {
-         SetArmMode(ARM_NONE);
-         g_AutoArm=false;
-      }
+      SetArmMode(ARM_NONE);
+      g_AutoArm=false;
    }
 }
 
@@ -1937,6 +2062,53 @@ void MonitorPartialClose()
    }
 }
 
+bool MoveTicketToBreakEven(ulong ticket,string &reason)
+{
+   reason="";
+   if(ticket==0 || !PositionSelectByTicket(ticket))
+   {
+      reason="position not found";
+      return false;
+   }
+
+   bool isBuy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+   double entry=PositionGetDouble(POSITION_PRICE_OPEN);
+   double oldSL=PositionGetDouble(POSITION_SL);
+   double tp=PositionGetDouble(POSITION_TP);
+   double newSL=isBuy ? entry+InpBreakEvenPlusPoints*_Point
+                      : entry-InpBreakEvenPlusPoints*_Point;
+
+   newSL=NormalizeDouble(newSL,_Digits);
+
+   if(isBuy && oldSL>=newSL && oldSL>0.0)
+   {
+      reason="already protected";
+      return true;
+   }
+   if(!isBuy && oldSL<=newSL && oldSL>0.0)
+   {
+      reason="already protected";
+      return true;
+   }
+
+   if(!ValidateStops(isBuy,newSL,tp,reason))
+      return false;
+
+   if(Trade.PositionModify(ticket,newSL,tp) && TradeRetcodeOK())
+   {
+      if(ticket==g_StateTicket)
+      {
+         g_BE_Done=true;
+         SavePositionState();
+      }
+      reason="moved";
+      return true;
+   }
+
+   reason=Trade.ResultRetcodeDescription();
+   return false;
+}
+
 void MoveToBreakEven()
 {
    int found=0;
@@ -1958,47 +2130,18 @@ void MoveToBreakEven()
 
       found++;
 
-      bool isBuy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
-      double entry=PositionGetDouble(POSITION_PRICE_OPEN);
-      double oldSL=PositionGetDouble(POSITION_SL);
-      double tp=PositionGetDouble(POSITION_TP);
-      double newSL=isBuy ? entry+InpBreakEvenPlusPoints*_Point
-                         : entry-InpBreakEvenPlusPoints*_Point;
-
-      newSL=NormalizeDouble(newSL,_Digits);
-
-      if(isBuy && oldSL>=newSL && oldSL>0.0)
-      {
-         already++;
-         continue;
-      }
-      if(!isBuy && oldSL<=newSL && oldSL>0.0)
-      {
-         already++;
-         continue;
-      }
-
       string reason="";
-      if(!ValidateStops(isBuy,newSL,tp,reason))
+      if(MoveTicketToBreakEven(ticket,reason))
       {
-         failed++;
-         lastFail=reason;
-         continue;
-      }
-
-      if(Trade.PositionModify(ticket,newSL,tp) && TradeRetcodeOK())
-      {
-         moved++;
-         if(ticket==g_StateTicket)
-         {
-            g_BE_Done=true;
-            SavePositionState();
-         }
+         if(reason=="already protected")
+            already++;
+         else
+            moved++;
       }
       else
       {
          failed++;
-         lastFail=Trade.ResultRetcodeDescription();
+         lastFail=reason;
       }
    }
 
@@ -2368,7 +2511,7 @@ void CalcDealStats(datetime fromTime,int &trades,int &wins,int &losses,double &n
 
       if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)
          continue;
-      if((long)HistoryDealGetInteger(deal,DEAL_MAGIC)!=InpMagic)
+      if(!IsDashboardMagic((long)HistoryDealGetInteger(deal,DEAL_MAGIC)))
          continue;
 
       long entry=HistoryDealGetInteger(deal,DEAL_ENTRY);
@@ -2405,7 +2548,7 @@ double OpenProfit()
          continue;
 
       if(PositionGetString(POSITION_SYMBOL)==_Symbol &&
-         (long)PositionGetInteger(POSITION_MAGIC)==InpMagic)
+         IsDashboardMagic((long)PositionGetInteger(POSITION_MAGIC)))
          p+=PositionGetDouble(POSITION_PROFIT);
    }
    return p;
@@ -3017,24 +3160,36 @@ void UpdatePanel()
 
    string timeText=TimeToString(now,TIME_SECONDS);
    string dateText=TimeToString(now,TIME_DATE);
+   string addEntryStatus="Open positions: "+IntegerToString(openCount)+" | next fresh model can add entry";
+   if(hasPos)
+   {
+      if(!g_SecondEntryOn)
+         addEntryStatus="Second entry OFF - one entry mode";
+      else if(openCount>=MaxEntriesPerCycle())
+         addEntryStatus="Maximum "+IntegerToString(MaxEntriesPerCycle())+" entries already open";
+      else if(g_SecondEntryDone)
+         addEntryStatus="Second entry already used for this trade";
+      else if(g_SecondEntryBlocked)
+         addEntryStatus="First trade reached "+DoubleToString(MathMax(0.1,InpSecondEntryCancelAtR),1)+"R, no second entry";
+   }
 
    if(g_AutoArm)
    {
       SetRect(UI+"STBG",C'28,35,12');
       SetTxt(UI+"STVAL","AUTO WAIT",clrGold);
-      SetTxt(UI+"STSUB",hasPos ? "Open positions: "+IntegerToString(openCount)+" | next fresh model can add entry" : "Next fresh BUY or SELL model will enter",C'180,190,215');
+      SetTxt(UI+"STSUB",hasPos ? addEntryStatus : "Next fresh BUY or SELL model will enter",C'180,190,215');
    }
    else if(g_ArmedMode==ARM_BUY)
    {
       SetRect(UI+"STBG",C'5,50,18');
       SetTxt(UI+"STVAL","BUY WAIT",C'80,255,140');
-      SetTxt(UI+"STSUB",hasPos ? "Open positions: "+IntegerToString(openCount)+" | next fresh BUY can add entry" : "Next fresh BUY setup will enter",C'180,190,215');
+      SetTxt(UI+"STSUB",hasPos ? addEntryStatus : "Next fresh BUY setup will enter",C'180,190,215');
    }
    else if(g_ArmedMode==ARM_SELL)
    {
       SetRect(UI+"STBG",C'52,10,10');
       SetTxt(UI+"STVAL","SELL WAIT",C'255,105,105');
-      SetTxt(UI+"STSUB",hasPos ? "Open positions: "+IntegerToString(openCount)+" | next fresh SELL can add entry" : "Next fresh SELL setup will enter",C'180,190,215');
+      SetTxt(UI+"STSUB",hasPos ? addEntryStatus : "Next fresh SELL setup will enter",C'180,190,215');
    }
    else if(hasPos)
    {
@@ -3236,6 +3391,9 @@ string TCX_CommandStatusText()
    int count=CountOurPositions();
    if(count>1) return IntegerToString(count)+" POSITIONS OPEN";
    if(count==1) return "POSITION OPEN";
+   int dashboardCount=CountDashboardPositions();
+   if(dashboardCount>1) return IntegerToString(dashboardCount)+" DASHBOARD POSITIONS";
+   if(dashboardCount==1) return "MANUAL POSITION OPEN";
    return "IDLE";
 }
 
@@ -3249,27 +3407,30 @@ string TCX_ArmText()
 
 string TCX_PositionJson()
 {
-   int count=CountOurPositions();
-   if(count<=0 || !SelectOurPosition())
-      return "{\"hasPosition\":false,\"count\":0,\"positions\":[]}";
-
-   bool isBuy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
-   double entry=PositionGetDouble(POSITION_PRICE_OPEN);
-   double sl=PositionGetDouble(POSITION_SL);
-   double tp=PositionGetDouble(POSITION_TP);
-   double profit=PositionGetDouble(POSITION_PROFIT);
-   double vol=PositionGetDouble(POSITION_VOLUME);
-   double rr=PositionRRFromValues(isBuy,entry,sl);
-
    string positions="[";
-   int rows=0;
+   int count=0;
+   int eaCount=0;
+   int manualCount=0;
+   bool firstSet=false;
+   bool isBuy=true;
+   double entry=0.0;
+   double sl=0.0;
+   double tp=0.0;
+   double profit=0.0;
+   double vol=0.0;
+   double rr=0.0;
+   long firstMagic=0;
+   ulong firstTicket=0;
+
    for(int i=PositionsTotal()-1;i>=0;i--)
    {
       ulong ticket=PositionGetTicket(i);
       if(ticket==0)
          continue;
-      if(PositionGetString(POSITION_SYMBOL)!=_Symbol ||
-         (long)PositionGetInteger(POSITION_MAGIC)!=InpMagic)
+
+      string symbol=PositionGetString(POSITION_SYMBOL);
+      long magic=(long)PositionGetInteger(POSITION_MAGIC);
+      if(symbol!=_Symbol || !IsDashboardMagic(magic))
          continue;
 
       bool rowBuy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
@@ -3279,12 +3440,36 @@ string TCX_PositionJson()
       double rowProfit=PositionGetDouble(POSITION_PROFIT);
       double rowVol=PositionGetDouble(POSITION_VOLUME);
       double rowRR=PositionRRFromValues(rowBuy,rowEntry,rowSL);
+      string source=DashboardSourceText(magic);
+      bool managed=IsManagedMagic(magic);
 
-      if(rows>0)
+      if(managed)
+         eaCount++;
+      else if(magic==0)
+         manualCount++;
+
+      if(!firstSet)
+      {
+         firstSet=true;
+         isBuy=rowBuy;
+         entry=rowEntry;
+         sl=rowSL;
+         tp=rowTP;
+         profit=rowProfit;
+         vol=rowVol;
+         rr=rowRR;
+         firstMagic=magic;
+         firstTicket=ticket;
+      }
+
+      if(count>0)
          positions+=",";
       positions+="{"
             +"\"ticket\":\""+IntegerToString((long)ticket)+"\""
             +",\"type\":\""+(rowBuy ? "BUY" : "SELL")+"\""
+            +",\"source\":\""+source+"\""
+            +",\"magic\":"+IntegerToString(magic)
+            +",\"managed\":"+TCX_BoolText(managed)
             +",\"volume\":"+DoubleToString(rowVol,VolumeDigits())
             +",\"entry\":"+DoubleToString(rowEntry,_Digits)
             +",\"sl\":"+DoubleToString(rowSL,_Digits)
@@ -3292,13 +3477,22 @@ string TCX_PositionJson()
             +",\"profit\":"+DoubleToString(rowProfit,2)
             +",\"rr\":"+DoubleToString(rowRR,2)
             +"}";
-      rows++;
+      count++;
    }
    positions+="]";
 
+   if(count<=0 || !firstSet)
+      return "{\"hasPosition\":false,\"count\":0,\"eaCount\":0,\"manualCount\":0,\"positions\":[]}";
+
    return "{\"hasPosition\":true"
           +",\"count\":"+IntegerToString(count)
+          +",\"eaCount\":"+IntegerToString(eaCount)
+          +",\"manualCount\":"+IntegerToString(manualCount)
+          +",\"ticket\":\""+IntegerToString((long)firstTicket)+"\""
           +",\"type\":\""+(isBuy ? "BUY" : "SELL")+"\""
+          +",\"source\":\""+DashboardSourceText(firstMagic)+"\""
+          +",\"magic\":"+IntegerToString(firstMagic)
+          +",\"managed\":"+TCX_BoolText(IsManagedMagic(firstMagic))
           +",\"volume\":"+DoubleToString(vol,VolumeDigits())
           +",\"entry\":"+DoubleToString(entry,_Digits)
           +",\"sl\":"+DoubleToString(sl,_Digits)
@@ -3391,7 +3585,7 @@ ulong TCX_FindEntryDeal(long positionId,int exitIndex)
          continue;
       if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)
          continue;
-      if((long)HistoryDealGetInteger(deal,DEAL_MAGIC)!=InpMagic)
+      if(!IsDashboardMagic((long)HistoryDealGetInteger(deal,DEAL_MAGIC)))
          continue;
       if((long)HistoryDealGetInteger(deal,DEAL_POSITION_ID)!=positionId)
          continue;
@@ -3422,7 +3616,8 @@ string TCX_TradeHistoryJson(int maxRows)
          continue;
       if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)
          continue;
-      if((long)HistoryDealGetInteger(deal,DEAL_MAGIC)!=InpMagic)
+      long dealMagic=(long)HistoryDealGetInteger(deal,DEAL_MAGIC);
+      if(!IsDashboardMagic(dealMagic))
          continue;
 
       long dealEntry=HistoryDealGetInteger(deal,DEAL_ENTRY);
@@ -3431,6 +3626,7 @@ string TCX_TradeHistoryJson(int maxRows)
 
       long positionId=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
       ulong entryDeal=TCX_FindEntryDeal(positionId,i);
+      long sourceMagic=(entryDeal>0 ? (long)HistoryDealGetInteger(entryDeal,DEAL_MAGIC) : dealMagic);
       long entryType=(entryDeal>0 ? HistoryDealGetInteger(entryDeal,DEAL_TYPE) : -1);
       long exitType=HistoryDealGetInteger(deal,DEAL_TYPE);
       datetime closeTime=(datetime)HistoryDealGetInteger(deal,DEAL_TIME);
@@ -3451,6 +3647,8 @@ string TCX_TradeHistoryJson(int maxRows)
       json+="{"
             +"\"id\":\""+IntegerToString((long)deal)+"\""
             +",\"positionId\":\""+IntegerToString(positionId)+"\""
+            +",\"source\":\""+DashboardSourceText(sourceMagic)+"\""
+            +",\"magic\":"+IntegerToString(sourceMagic)
             +",\"type\":\""+TCX_DealSideText(entryType,exitType)+"\""
             +",\"volume\":"+DoubleToString(HistoryDealGetDouble(deal,DEAL_VOLUME),VolumeDigits())
             +",\"entryPrice\":"+(entryDeal>0 ? TCX_JsonPrice(HistoryDealGetDouble(entryDeal,DEAL_PRICE)) : "null")
@@ -3502,6 +3700,10 @@ string TCX_BuildStateJson()
       +"\"source\":\"mt5-ea\""
       +",\"serverTime\":\""+TCX_JsonEscape(TimeToString(now,TIME_DATE|TIME_SECONDS))+"\""
       +",\"accountLogin\":\""+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"\""
+      +",\"accountName\":\""+TCX_JsonEscape(AccountInfoString(ACCOUNT_NAME))+"\""
+      +",\"accountCompany\":\""+TCX_JsonEscape(AccountInfoString(ACCOUNT_COMPANY))+"\""
+      +",\"accountServer\":\""+TCX_JsonEscape(AccountInfoString(ACCOUNT_SERVER))+"\""
+      +",\"platform\":\"MetaTrader 5\""
       +",\"symbol\":\""+TCX_JsonEscape(_Symbol)+"\""
       +",\"period\":\""+TCX_JsonEscape(EnumToString(_Period))+"\""
       +",\"eaOnline\":true"
@@ -3684,20 +3886,59 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
 
    if(action=="ARM_BUY")
    {
-      SetArmMode(g_ArmedMode==ARM_BUY ? ARM_NONE : ARM_BUY);
-      msg=(g_ArmedMode==ARM_BUY ? "WEB BUY armed - waiting for next model" : "WEB BUY wait cancelled");
+      string reason="";
+      if(g_ArmedMode==ARM_BUY)
+      {
+         SetArmMode(ARM_NONE);
+         msg="WEB BUY wait cancelled";
+      }
+      else if(CanStartModelEntry(reason))
+      {
+         SetArmMode(ARM_BUY);
+         msg="WEB BUY armed - waiting for next model";
+      }
+      else
+      {
+         msg=reason;
+      }
       SetLastMessage(msg,g_ArmedMode==ARM_BUY ? clrLime : clrSilver);
    }
    else if(action=="ARM_SELL")
    {
-      SetArmMode(g_ArmedMode==ARM_SELL ? ARM_NONE : ARM_SELL);
-      msg=(g_ArmedMode==ARM_SELL ? "WEB SELL armed - waiting for next model" : "WEB SELL wait cancelled");
+      string reason="";
+      if(g_ArmedMode==ARM_SELL)
+      {
+         SetArmMode(ARM_NONE);
+         msg="WEB SELL wait cancelled";
+      }
+      else if(CanStartModelEntry(reason))
+      {
+         SetArmMode(ARM_SELL);
+         msg="WEB SELL armed - waiting for next model";
+      }
+      else
+      {
+         msg=reason;
+      }
       SetLastMessage(msg,g_ArmedMode==ARM_SELL ? clrTomato : clrSilver);
    }
    else if(action=="AUTO_ARM")
    {
-      SetAutoArm(!g_AutoArm);
-      msg=(g_AutoArm ? "WEB auto arm enabled" : "WEB auto arm disabled");
+      string reason="";
+      if(g_AutoArm)
+      {
+         SetAutoArm(false);
+         msg="WEB auto arm disabled";
+      }
+      else if(CanStartModelEntry(reason))
+      {
+         SetAutoArm(true);
+         msg="WEB auto arm enabled";
+      }
+      else
+      {
+         msg=reason;
+      }
       SetLastMessage(msg,g_AutoArm ? clrGold : clrSilver);
    }
    else if(action=="CANCEL")
@@ -3743,6 +3984,11 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
    else if(action=="TOGGLE_SECOND_ENTRY")
    {
       g_SecondEntryOn=!g_SecondEntryOn;
+      if(!g_SecondEntryOn && HasOurPosition())
+      {
+         SetArmMode(ARM_NONE);
+         g_AutoArm=false;
+      }
       SyncSecondEntryState();
       msg=(g_SecondEntryOn ? "WEB second entry enabled" : "WEB second entry disabled");
       SetLastMessage(msg,g_SecondEntryOn ? clrSkyBlue : clrSilver);
@@ -3787,6 +4033,11 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       if(TCX_JsonHasKey(raw,"secondEntryOn"))
       {
          g_SecondEntryOn=TCX_JsonBool(raw,"secondEntryOn",g_SecondEntryOn);
+         if(!g_SecondEntryOn && HasOurPosition())
+         {
+            SetArmMode(ARM_NONE);
+            g_AutoArm=false;
+         }
          SyncSecondEntryState();
       }
       SetEditText(E_PC1,g_PC1_Pct,0);
@@ -4067,7 +4318,18 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
 
    if(sparam==B_BUY)
    {
-      SetArmMode(g_ArmedMode==ARM_BUY ? ARM_NONE : ARM_BUY);
+      string reason="";
+      if(g_ArmedMode==ARM_BUY)
+         SetArmMode(ARM_NONE);
+      else if(CanStartModelEntry(reason))
+         SetArmMode(ARM_BUY);
+      else
+      {
+         SetLastMessage(reason,clrGold);
+         UpdatePanel();
+         return;
+      }
+
       SetLastMessage(g_ArmedMode==ARM_BUY ? "BUY armed - waiting for next model" : "BUY wait cancelled",
                      g_ArmedMode==ARM_BUY ? clrLime : clrSilver);
       UpdatePanel();
@@ -4076,7 +4338,18 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
 
    if(sparam==B_SELL)
    {
-      SetArmMode(g_ArmedMode==ARM_SELL ? ARM_NONE : ARM_SELL);
+      string reason="";
+      if(g_ArmedMode==ARM_SELL)
+         SetArmMode(ARM_NONE);
+      else if(CanStartModelEntry(reason))
+         SetArmMode(ARM_SELL);
+      else
+      {
+         SetLastMessage(reason,clrGold);
+         UpdatePanel();
+         return;
+      }
+
       SetLastMessage(g_ArmedMode==ARM_SELL ? "SELL armed - waiting for next model" : "SELL wait cancelled",
                      g_ArmedMode==ARM_SELL ? clrTomato : clrSilver);
       UpdatePanel();
@@ -4085,7 +4358,18 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
 
    if(sparam==B_AUTO)
    {
-      SetAutoArm(!g_AutoArm);
+      string reason="";
+      if(g_AutoArm)
+         SetAutoArm(false);
+      else if(CanStartModelEntry(reason))
+         SetAutoArm(true);
+      else
+      {
+         SetLastMessage(reason,clrGold);
+         UpdatePanel();
+         return;
+      }
+
       SetLastMessage(g_AutoArm ? "Auto arm enabled - waiting for next model" : "Auto arm disabled",
                      g_AutoArm ? clrGold : clrSilver);
       UpdatePanel();
@@ -4134,6 +4418,11 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
    if(sparam==B_SECOND)
    {
       g_SecondEntryOn=!g_SecondEntryOn;
+      if(!g_SecondEntryOn && HasOurPosition())
+      {
+         SetArmMode(ARM_NONE);
+         g_AutoArm=false;
+      }
       SyncSecondEntryState();
       SetLastMessage(g_SecondEntryOn ? "Second entry enabled - waits for -0.5R before 2R" : "Second entry disabled",
                      g_SecondEntryOn ? clrSkyBlue : clrSilver);

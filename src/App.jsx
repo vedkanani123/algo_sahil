@@ -80,6 +80,183 @@ const TELEGRAM_PREFS = [
 
 const DEFAULT_TELEGRAM_PREFS = TELEGRAM_PREFS.reduce((acc, [key]) => ({ ...acc, [key]: true }), {})
 
+const RULE_COMPANIES = [
+  { id: 'fundingpips', label: 'FundingPips', hasRules: true },
+  { id: 'other', label: 'Other company', hasRules: false }
+]
+
+const ACCOUNT_SIZE_AUTO = 'auto'
+const ACCOUNT_SIZE_CUSTOM = 'custom'
+const FUNDING_PIPS_STANDARD_SIZES = [5000, 10000, 25000, 50000, 100000]
+const FUNDING_PIPS_EXTENDED_SIZES = [...FUNDING_PIPS_STANDARD_SIZES, 200000]
+
+const COMMON_FP_RULES = {
+  lotLimit: 20,
+  riskIdeaSmall: 3,
+  riskIdeaLarge: 2,
+  riskIdeaSplit: 50000,
+  inactivityDays: 30,
+  commissions: [
+    ['Forex', '$5 per lot', '$10 per lot'],
+    ['Metals', '$5 per lot', '$10 per lot'],
+    ['Energies', 'No commission', 'No commission'],
+    ['Indices', 'No commission', 'No commission'],
+    ['Crypto', '0.04%', '0.04%']
+  ],
+  leverage: [
+    ['Forex', '1:30', '1:30'],
+    ['Metals', '1:10', '1:10'],
+    ['Energies', '1:10', '1:10'],
+    ['Indices', '1:5', '1:5'],
+    ['Crypto', '1:1', '1:1']
+  ],
+  dynamicLeverage: [
+    ['0.00 - 0.05 lots', '1:50'],
+    ['0.05 - 0.10 lots', '1:30'],
+    ['0.10 - 0.15 lots', '1:25'],
+    ['0.15 - 0.25 lots', '1:20'],
+    ['0.25 - 0.50 lots', '1:10'],
+    ['0.50+ lots', '1:5']
+  ],
+  generalRules: [
+    '20 lots maximum per click or transaction.',
+    'Inactivity breach after 30 consecutive days without a completed trade.',
+    'Copy trading is allowed only between accounts owned by the same trader.',
+    'Forbidden strategies include gap trading, HFT, latency arbitrage, toxic flow, hedging, opposite account trading, tick scalping, and third-party account management.',
+    'Stop loss is not required, but risk limits still apply.'
+  ]
+}
+
+const FUNDING_PIPS_RULES = {
+  one_step: {
+    id: 'one_step',
+    label: '1 Step Model',
+    summary: 'Single Student phase, then Master account.',
+    source: 'FundingPips Help Center - 1 Step Model',
+    accountSizes: FUNDING_PIPS_STANDARD_SIZES,
+    phases: [
+      { label: 'Student', target: 10, days: 3 },
+      { label: 'Master', target: null, days: null }
+    ],
+    dailyLossPct: 3,
+    maxLossPct: 6,
+    maxLossLabel: 'Maximum Loss',
+    consistencyPct: 35,
+    consistencyScope: 'On Demand Master rewards',
+    rewardText: 'On Demand 90%, Weekly 60%, Bi-Weekly 80%, Monthly 100%.',
+    news: 'Evaluation has no news holding restriction. Master account cannot open or close within 5 minutes before or after high-impact news on affected instruments.',
+    weekend: 'Temporary master rule: weekend holding is not allowed; open trades may be closed by the system.',
+    leverage: COMMON_FP_RULES.leverage,
+    commissions: COMMON_FP_RULES.commissions
+  },
+  two_step: {
+    id: 'two_step',
+    label: '2 Step Model',
+    summary: 'Student and Practitioner evaluation phases, then Master account.',
+    source: 'FundingPips Help Center - 2 Step Model',
+    accountSizes: FUNDING_PIPS_STANDARD_SIZES,
+    phases: [
+      { label: 'Student Option 1', target: 8, days: 3 },
+      { label: 'Student Option 2', target: 10, days: 3 },
+      { label: 'Practitioner', target: 5, days: 3 },
+      { label: 'Master', target: null, days: null }
+    ],
+    dailyLossPct: 5,
+    maxLossPct: 10,
+    maxLossLabel: 'Maximum Loss',
+    consistencyPct: 35,
+    consistencyScope: 'On Demand Master rewards',
+    rewardText: 'On Demand 90%, Weekly 60%, Bi-Weekly 80%, Monthly 100%.',
+    news: 'Evaluation has no news holding restriction. Master account cannot open or close within 5 minutes before or after high-impact news on affected instruments.',
+    weekend: 'Temporary master rule: weekend holding is not allowed; open trades may be closed by the system.',
+    leverage: [
+      ['Forex', '1:100', '1:30'],
+      ['Metals', '1:30', '1:10'],
+      ['Energies', '1:10', '1:10'],
+      ['Indices', '1:20', '1:5'],
+      ['Crypto', '1:2', '1:1']
+    ],
+    commissions: COMMON_FP_RULES.commissions
+  },
+  two_step_pro: {
+    id: 'two_step_pro',
+    label: '2 Step Pro Model',
+    summary: 'Two faster phases with 1 minimum trading day each.',
+    source: 'FundingPips Help Center - 2 Step Pro Model',
+    accountSizes: FUNDING_PIPS_EXTENDED_SIZES,
+    phases: [
+      { label: 'Student', target: 6, days: 1 },
+      { label: 'Practitioner', target: 6, days: 1 },
+      { label: 'Master', target: null, days: null }
+    ],
+    dailyLossPct: 3,
+    maxLossPct: 6,
+    maxLossLabel: 'Maximum Loss',
+    consistencyPct: 35,
+    consistencyScope: 'Only when Daily Reward cycle is selected for evaluation phases',
+    rewardText: 'Weekly reward cycle has no consistency rule; Daily Reward add-on adds 35% consistency during evaluation phases.',
+    news: 'Evaluation has no news holding restriction. Master account cannot open or close within 5 minutes before or after high-impact news on affected instruments.',
+    weekend: 'Weekend holding follows Master account announcements and temporary trading condition updates.',
+    leverage: COMMON_FP_RULES.leverage,
+    commissions: COMMON_FP_RULES.commissions
+  },
+  zero: {
+    id: 'zero',
+    label: 'FundingPips Zero',
+    summary: 'Direct Master account with trailing loss, risk, consistency, news, and weekend restrictions.',
+    source: 'FundingPips Help Center - FundingPips Zero',
+    accountSizes: FUNDING_PIPS_EXTENDED_SIZES,
+    phases: [
+      { label: 'Master', target: null, days: null }
+    ],
+    dailyLossPct: 3,
+    trailingLossPct: 5,
+    maxRiskPct: 1,
+    maxLossLabel: 'Maximum Trailing Loss',
+    consistencyPct: 15,
+    consistencyScope: 'Reward request on Zero Master account',
+    profitableDaysRequired: 7,
+    profitableDayPct: 0.25,
+    rewardText: 'Bi-Weekly 95% reward split after first executed trade, with 15% consistency, 7 profitable days, 3% safety cushion, and biggest loss not exceeding biggest win.',
+    news: 'High-impact news holding is not allowed on Zero Master account.',
+    weekend: 'Weekend holding is not allowed on FundingPips Zero, even with Swap Free add-on.',
+    leverage: [
+      ['Forex', '1:50', '1:30'],
+      ['Metals', '1:20', '1:10'],
+      ['Energies', '1:10', '1:10'],
+      ['Indices', '1:20', '1:5'],
+      ['Crypto', '1:2', '1:1']
+    ],
+    commissions: [
+      ['Forex', '$7 per lot', '$10 per lot'],
+      ['Metals', '$7 per lot', '$10 per lot'],
+      ['Energies', 'No commission', 'No commission'],
+      ['Indices', 'No commission', 'No commission'],
+      ['Crypto', '0.04%', '0.04%']
+    ]
+  },
+  instant_1k: {
+    id: 'instant_1k',
+    label: '1K Instant Account',
+    summary: 'Giveaway instant account with no evaluation phase.',
+    source: 'FundingPips Help Center - 1K Instant Account',
+    accountSizes: [1000],
+    phases: [
+      { label: 'Instant Master', target: null, days: null }
+    ],
+    dailyLossPct: null,
+    maxLossPct: null,
+    maxLossLabel: 'Not published in crawl',
+    consistencyPct: null,
+    rewardText: 'No evaluation phase, no minimum days, no time limits, no consistency score. Minimum 50% of every reward request is transferred to Tradin account.',
+    news: 'News trading is allowed.',
+    weekend: 'Weekend holding is allowed.',
+    leverage: [],
+    commissions: [],
+    specialRules: ['Hedging is strictly prohibited and may result in immediate account closure.', 'Third-party EAs and trade copiers are permitted.']
+  }
+}
+
 function n(v, d = 2) {
   const x = Number(v)
   if (!Number.isFinite(x)) return '--'
@@ -141,6 +318,242 @@ function clampNumber(value, min, max) {
   const x = Number(value)
   if (!Number.isFinite(x)) return min
   return Math.max(min, Math.min(max, x))
+}
+
+function moneyValue(v, currency = '') {
+  const x = Number(v)
+  if (!Number.isFinite(x)) return '--'
+  return `${currency ? currency + ' ' : ''}${x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function rulePct(used, inverse = false) {
+  const x = Number(used)
+  if (!Number.isFinite(x)) return 0
+  const pctValue = inverse ? 100 - x : x
+  return Math.max(0, Math.min(100, pctValue))
+}
+
+function numberValue(value, fallback = 0) {
+  const x = Number(value)
+  return Number.isFinite(x) ? x : fallback
+}
+
+function avg(values) {
+  const clean = values.filter(v => Number.isFinite(Number(v)))
+  if (!clean.length) return null
+  return clean.reduce((sum, v) => sum + Number(v), 0) / clean.length
+}
+
+function pad2(value) {
+  return String(value).padStart(2, '0')
+}
+
+function dateKeyFromSeconds(seconds) {
+  const d = new Date(Number(seconds) * 1000)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+function displayDateKey(key) {
+  if (!key) return '--'
+  const [year, month, day] = String(key).split('-')
+  if (!year || !month || !day) return key
+  return `${day}-${month}-${year}`
+}
+
+function historySeconds(row, field = 'closeTimeSec') {
+  const direct = Number(row?.[field])
+  if (Number.isFinite(direct) && direct > 0) return direct
+  const text = row?.[field.replace('Sec', '')]
+  if (!text) return 0
+  const normalized = String(text).replace(/\./g, '-')
+  const parsed = new Date(normalized)
+  return Number.isNaN(parsed.getTime()) ? 0 : Math.floor(parsed.getTime() / 1000)
+}
+
+function durationParts(fromSeconds, toMs = Date.now()) {
+  const start = Number(fromSeconds) * 1000
+  if (!Number.isFinite(start) || start <= 0) return null
+  let remaining = Math.max(0, Math.floor((toMs - start) / 1000))
+  const days = Math.floor(remaining / 86400)
+  remaining -= days * 86400
+  const hours = Math.floor(remaining / 3600)
+  remaining -= hours * 3600
+  const minutes = Math.floor(remaining / 60)
+  const seconds = remaining - minutes * 60
+  return { days, hours, minutes, seconds }
+}
+
+function tradeR(row) {
+  const entry = Number(row?.entryPrice)
+  const exit = Number(row?.exitPrice)
+  const sl = Number(row?.sl)
+  if (![entry, exit, sl].every(Number.isFinite) || sl <= 0) return null
+  const risk = Math.abs(entry - sl)
+  if (risk <= 0) return null
+  const side = String(row?.type || '').toUpperCase()
+  const move = side === 'SELL' ? entry - exit : exit - entry
+  return move / risk
+}
+
+function ringStatus(used, allowed, inverse = false) {
+  if (!Number.isFinite(Number(allowed)) || Number(allowed) <= 0) return 'neutral'
+  const pctUsed = Math.max(0, Number(used) / Number(allowed) * 100)
+  if (inverse) return pctUsed >= 100 ? 'pass' : 'watch'
+  if (pctUsed >= 100) return 'breach'
+  if (pctUsed >= 75) return 'watch'
+  return 'pass'
+}
+
+function buildRuleMetrics(rawState, rule, selectedPhase, selectedAccountSize = null) {
+  const s = rawState || {}
+  const rows = Array.isArray(s.tradeHistory) ? s.tradeHistory : []
+  const currency = s.currency || 'USD'
+  const currentBalance = numberValue(s.balance, 0)
+  const currentEquity = numberValue(s.equity, currentBalance)
+  const openPL = numberValue(s.openPL, currentEquity - currentBalance)
+  const closedNetFromRows = rows.reduce((sum, row) => sum + numberValue(row.profit, 0), 0)
+  const closedNet = Number.isFinite(Number(s.totalNet)) ? Number(s.totalNet) : closedNetFromRows
+  const inferredSize = currentBalance - closedNet
+  const explicitSize = Number(selectedAccountSize)
+  const accountSize = explicitSize > 0 ? explicitSize : inferredSize > 0 ? inferredSize : currentBalance > 0 ? currentBalance : 100000
+  const totalProfit = currentEquity - accountSize
+  const positiveProfit = Math.max(0, totalProfit)
+  const dayNet = Number.isFinite(Number(s.dayNet)) ? Number(s.dayNet) : 0
+  const dailyStartBalance = currentBalance - dayNet
+  const dailyStartEquity = currentEquity - dayNet - openPL
+  const dailyBase = Math.max(dailyStartBalance, dailyStartEquity, accountSize)
+  const dailyAllowed = rule?.dailyLossPct ? dailyBase * rule.dailyLossPct / 100 : null
+  const dailyUsed = dailyAllowed === null ? null : Math.max(0, dailyBase - currentEquity)
+  const dailyRemaining = dailyAllowed === null ? null : dailyAllowed - dailyUsed
+  const dailyFloor = dailyAllowed === null ? null : dailyBase - dailyAllowed
+
+  const dailyMap = new Map()
+  for (const row of rows) {
+    const sec = historySeconds(row, 'closeTimeSec')
+    const key = dateKeyFromSeconds(sec)
+    if (!key) continue
+    const profit = numberValue(row.profit, 0)
+    const current = dailyMap.get(key) || { key, net: 0, trades: 0, wins: 0, losses: 0 }
+    current.net += profit
+    current.trades += 1
+    if (profit > 0) current.wins += 1
+    if (profit < 0) current.losses += 1
+    dailyMap.set(key, current)
+  }
+
+  const todayKey = dateKeyFromSeconds(Date.now() / 1000)
+  if (todayKey) {
+    const today = dailyMap.get(todayKey) || { key: todayKey, net: 0, trades: 0, wins: 0, losses: 0 }
+    today.net = dayNet || today.net
+    today.trades = Number.isFinite(Number(s.dayTrades)) ? Number(s.dayTrades) : today.trades
+    dailyMap.set(todayKey, today)
+  }
+
+  const dailyRowsAsc = Array.from(dailyMap.values()).sort((a, b) => a.key.localeCompare(b.key))
+  const visibleClosedNet = dailyRowsAsc.reduce((sum, day) => sum + day.net, 0)
+  let runningBalance = currentBalance - visibleClosedNet
+  const chartRows = dailyRowsAsc.map(day => {
+    runningBalance += day.net
+    return {
+      ...day,
+      balance: runningBalance,
+      equity: day.key === todayKey ? currentEquity : runningBalance
+    }
+  })
+  if (!chartRows.length) {
+    chartRows.push({ key: todayKey || dateKeyFromSeconds(Date.now() / 1000), net: dayNet, trades: numberValue(s.dayTrades, 0), wins: 0, losses: 0, balance: currentBalance, equity: currentEquity })
+  }
+
+  const highwater = Math.max(accountSize, currentBalance, currentEquity, ...chartRows.map(day => Math.max(day.balance, day.equity)))
+  const watchValue = Math.min(currentBalance || currentEquity, currentEquity || currentBalance)
+  const maxFloor = rule?.trailingLossPct
+    ? Math.min(accountSize, highwater - accountSize * rule.trailingLossPct / 100)
+    : rule?.maxLossPct ? accountSize * (1 - rule.maxLossPct / 100) : null
+  const maxAllowed = maxFloor === null ? null : rule?.trailingLossPct ? highwater - maxFloor : accountSize - maxFloor
+  const maxUsed = maxFloor === null ? null : rule?.trailingLossPct ? Math.max(0, highwater - watchValue) : Math.max(0, accountSize - watchValue)
+  const maxRemaining = maxAllowed === null || maxUsed === null ? null : maxAllowed - maxUsed
+
+  const targetAmount = selectedPhase?.target ? accountSize * selectedPhase.target / 100 : null
+  const targetProgress = targetAmount ? Math.max(0, positiveProfit) / targetAmount * 100 : null
+  const tradingDays = dailyRowsAsc.filter(day => day.trades > 0).length
+  const profitableDayFloor = rule?.profitableDayPct ? accountSize * rule.profitableDayPct / 100 : 0
+  const profitableDays = dailyRowsAsc.filter(day => day.net >= profitableDayFloor && day.trades > 0).length
+  const requiredDays = rule?.profitableDaysRequired || selectedPhase?.days || 0
+  const dayObjectiveCount = rule?.profitableDaysRequired ? profitableDays : tradingDays
+
+  const consistencyTopDay = Math.max(0, ...dailyRowsAsc.map(day => day.net))
+  const consistencyScore = positiveProfit > 0 ? consistencyTopDay / positiveProfit * 100 : 0
+  const consistencyAllowed = rule?.consistencyPct || null
+  const totalTrades = numberValue(s.totalTrades, rows.length)
+  const wins = numberValue(s.wins, rows.filter(row => numberValue(row.profit, 0) > 0).length)
+  const losses = numberValue(s.losses, rows.filter(row => numberValue(row.profit, 0) < 0).length)
+  const winRate = totalTrades > 0 ? numberValue(s.winRate, wins * 100 / totalTrades) : 0
+  const lossRate = totalTrades > 0 ? 100 - winRate : 0
+  const avgWin = avg(rows.map(row => numberValue(row.profit, NaN)).filter(v => v > 0))
+  const avgLoss = avg(rows.map(row => numberValue(row.profit, NaN)).filter(v => v < 0))
+  const avgRR = avg(rows.map(tradeR).filter(v => v !== null))
+  const expectancy = totalTrades > 0 ? closedNet / totalTrades : null
+  const positions = Array.isArray(s.position?.positions) ? s.position.positions : []
+  const maxOpenLots = Math.max(0, ...positions.map(pos => numberValue(pos.volume, 0)))
+  const openFloatingLoss = Math.max(0, -openPL)
+  const zeroMaxRiskAmount = rule?.maxRiskPct ? accountSize * rule.maxRiskPct / 100 : null
+  const firstTradeSec = rows.reduce((min, row) => {
+    const sec = historySeconds(row, 'openTimeSec') || historySeconds(row, 'closeTimeSec')
+    return sec > 0 ? Math.min(min, sec) : min
+  }, Number.POSITIVE_INFINITY)
+
+  return {
+    currency,
+    rows,
+    currentBalance,
+    currentEquity,
+    openPL,
+    closedNet,
+    accountSize,
+    inferredAccountSize: inferredSize > 0 ? inferredSize : null,
+    explicitAccountSize: explicitSize > 0 ? explicitSize : null,
+    totalProfit,
+    positiveProfit,
+    dailyStartBalance,
+    dailyStartEquity,
+    dailyBase,
+    dailyAllowed,
+    dailyUsed,
+    dailyRemaining,
+    dailyFloor,
+    maxFloor,
+    maxAllowed,
+    maxUsed,
+    maxRemaining,
+    highwater,
+    targetAmount,
+    targetProgress,
+    tradingDays,
+    profitableDays,
+    profitableDayFloor,
+    requiredDays,
+    dayObjectiveCount,
+    consistencyTopDay,
+    consistencyScore,
+    consistencyAllowed,
+    totalTrades,
+    wins,
+    losses,
+    winRate,
+    lossRate,
+    avgWin,
+    avgLoss,
+    avgRR,
+    expectancy,
+    maxOpenLots,
+    openFloatingLoss,
+    zeroMaxRiskAmount,
+    firstTradeSec: Number.isFinite(firstTradeSec) ? firstTradeSec : null,
+    elapsed: Number.isFinite(firstTradeSec) ? durationParts(firstTradeSec) : null,
+    chartRows,
+    dailyRows: chartRows.slice().reverse()
+  }
 }
 
 async function sha256Hex(text) {
@@ -382,6 +795,7 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
         <div className="viewToggle" role="group" aria-label="Dashboard view">
           <button className={view === 'dashboard' ? 'active' : ''} onClick={() => setView('dashboard')} title="Dashboard"><Activity size={16} /> Dashboard</button>
           <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')} title="Trade history"><History size={16} /> Trades</button>
+          <button className={view === 'rules' ? 'active' : ''} onClick={() => setView('rules')} title="Funding rules"><ListChecks size={16} /> Rules</button>
           <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')} title="Settings"><Settings2 size={16} /> Settings</button>
         </div>
         <div className="syncBadge" title="Dashboard polls live data every 1 second">
@@ -425,6 +839,7 @@ function StatusHero({ state, selected }) {
         <div className="chips">
           <div className="chip">Arm <b>{s.arm || 'OFF'}</b></div>
           <div className="chip">Positions <b>{s.position?.count ?? (s.position?.hasPosition ? 1 : 0)}</b></div>
+          <div className="chip">Manual <b>{s.position?.manualCount ?? 0}</b></div>
           <div className="chip">TF <b>{s.period || '--'}</b></div>
           <div className="chip">Spread <b>{s.spread ?? '--'}</b></div>
           <div className="chip">SL/TP Space <b>{s.spreadProtectionPoints ?? 0}</b></div>
@@ -668,6 +1083,7 @@ function PositionPanel({ state }) {
   const s = state?.state || {}
   const p = s.position || {}
   const positions = Array.isArray(p.positions) && p.positions.length ? p.positions : (p.hasPosition ? [p] : [])
+  const sourceText = (pos) => pos.source || (Number(pos.magic) === 0 ? 'Manual' : 'EA')
 
   return (
     <section className="glass panel positionPanel">
@@ -680,20 +1096,24 @@ function PositionPanel({ state }) {
       </div>
 
       {!positions.length ? (
-        <div className="emptyState">No matching open position.</div>
+        <div className="emptyState">No open dashboard position.</div>
       ) : (
         <div className="positionList">
-          {positions.map((pos, index) => (
-            <div className="positionRow" key={pos.ticket || `${pos.type}-${index}`}>
-              <div className="posItem"><span>Type</span><strong className={pos.type === 'BUY' ? 'pos' : 'neg'}>{pos.type}</strong></div>
-              <div className="posItem"><span>Volume</span><strong>{pos.volume}</strong></div>
-              <div className="posItem"><span>RR</span><strong>{n(pos.rr)}R</strong></div>
-              <div className="posItem"><span>P/L</span><strong className={clsPL(pos.profit)}>{money(pos.profit, s.currency)}</strong></div>
-              <div className="posItem"><span>Entry</span><strong>{pos.entry}</strong></div>
-              <div className="posItem"><span>SL</span><strong>{pos.sl}</strong></div>
-              <div className="posItem"><span>TP</span><strong>{pos.tp}</strong></div>
-            </div>
-          ))}
+          {positions.map((pos, index) => {
+            const source = sourceText(pos)
+            return (
+              <div className="positionRow" key={pos.ticket || `${pos.type}-${index}`}>
+                <div className="posItem"><span>Source</span><strong><span className={`sourcePill ${source === 'Manual' ? 'manual' : 'ea'}`}>{source}</span></strong></div>
+                <div className="posItem"><span>Type</span><strong className={pos.type === 'BUY' ? 'pos' : 'neg'}>{pos.type}</strong></div>
+                <div className="posItem"><span>Volume</span><strong>{pos.volume}</strong></div>
+                <div className="posItem"><span>RR</span><strong>{n(pos.rr)}R</strong></div>
+                <div className="posItem"><span>P/L</span><strong className={clsPL(pos.profit)}>{money(pos.profit, s.currency)}</strong></div>
+                <div className="posItem"><span>Entry</span><strong>{pos.entry}</strong></div>
+                <div className="posItem"><span>SL</span><strong>{pos.sl}</strong></div>
+                <div className="posItem"><span>TP</span><strong>{pos.tp}</strong></div>
+              </div>
+            )
+          })}
         </div>
       )}
     </section>
@@ -1014,6 +1434,508 @@ function TelegramSettingsPage({ session }) {
   )
 }
 
+function RulesPage({ state, selected }) {
+  const s = state?.state || {}
+  const [company, setCompany] = useState('fundingpips')
+  const [modelId, setModelId] = useState('two_step')
+  const [phaseIndex, setPhaseIndex] = useState(0)
+  const [accountSizeMode, setAccountSizeMode] = useState(ACCOUNT_SIZE_AUTO)
+  const [customAccountSize, setCustomAccountSize] = useState('')
+  const storageKey = `tcx-rule-config-${selected?.id || 'default'}`
+  const rule = FUNDING_PIPS_RULES[modelId]
+  const companyInfo = RULE_COMPANIES.find(x => x.id === company)
+  const accountSizeOptions = rule?.accountSizes || FUNDING_PIPS_STANDARD_SIZES
+  const selectedAccountSize = accountSizeMode === ACCOUNT_SIZE_AUTO
+    ? null
+    : accountSizeMode === ACCOUNT_SIZE_CUSTOM
+      ? Number(customAccountSize)
+      : Number(accountSizeMode)
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(storageKey)
+      if (!raw) return
+      const saved = JSON.parse(raw)
+      if (saved.company) setCompany(saved.company)
+      if (saved.modelId && FUNDING_PIPS_RULES[saved.modelId]) setModelId(saved.modelId)
+      if (Number.isFinite(Number(saved.phaseIndex))) setPhaseIndex(Number(saved.phaseIndex))
+      if (saved.accountSizeMode) setAccountSizeMode(String(saved.accountSizeMode))
+      if (saved.customAccountSize) setCustomAccountSize(String(saved.customAccountSize))
+    } catch {
+      // Local storage is optional. Live calculations still work without it.
+    }
+  }, [storageKey])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify({ company, modelId, phaseIndex, accountSizeMode, customAccountSize }))
+    } catch {
+      // Ignore storage failures in private browsing or locked-down browsers.
+    }
+  }, [storageKey, company, modelId, phaseIndex, accountSizeMode, customAccountSize])
+
+  useEffect(() => {
+    if (accountSizeMode === ACCOUNT_SIZE_AUTO || accountSizeMode === ACCOUNT_SIZE_CUSTOM) return
+    if (!accountSizeOptions.includes(Number(accountSizeMode))) setAccountSizeMode(ACCOUNT_SIZE_AUTO)
+  }, [accountSizeMode, accountSizeOptions])
+
+  const phases = rule?.phases || []
+  const selectedPhase = phases[Math.min(phaseIndex, Math.max(0, phases.length - 1))] || phases[0] || {}
+  const metrics = buildRuleMetrics(s, rule, selectedPhase, selectedAccountSize)
+  const currency = metrics.currency
+  const riskIdeaPct = metrics.accountSize < COMMON_FP_RULES.riskIdeaSplit ? COMMON_FP_RULES.riskIdeaSmall : COMMON_FP_RULES.riskIdeaLarge
+  const riskIdeaAmount = metrics.accountSize * riskIdeaPct / 100
+  const targetLeft = metrics.targetAmount === null ? null : Math.max(0, metrics.targetAmount - metrics.positiveProfit)
+  const requiredDayLabel = rule?.profitableDaysRequired ? 'Profitable Days' : 'Min. Trading Days'
+  const dayProgress = metrics.requiredDays ? metrics.dayObjectiveCount / metrics.requiredDays * 100 : null
+  const dailyProgress = metrics.dailyAllowed ? metrics.dailyUsed / metrics.dailyAllowed * 100 : null
+  const maxProgress = metrics.maxAllowed ? metrics.maxUsed / metrics.maxAllowed * 100 : null
+  const consistencyProgress = metrics.consistencyAllowed ? metrics.consistencyScore / metrics.consistencyAllowed * 100 : null
+  const riskProgress = metrics.zeroMaxRiskAmount
+    ? metrics.openFloatingLoss / metrics.zeroMaxRiskAmount * 100
+    : metrics.maxOpenLots / COMMON_FP_RULES.lotLimit * 100
+  const objectives = [
+    {
+      label: 'Profit',
+      value: money(metrics.totalProfit, currency),
+      progress: metrics.targetAmount ? metrics.targetProgress : null,
+      center: metrics.targetAmount ? `${n(rulePct(metrics.targetProgress), 0)}%` : null,
+      state: metrics.targetAmount ? (metrics.positiveProfit >= metrics.targetAmount ? 'pass' : 'watch') : metrics.totalProfit >= 0 ? 'pass' : 'breach',
+      detail: metrics.targetAmount ? `${moneyValue(Math.max(0, metrics.positiveProfit), currency)} / ${moneyValue(metrics.targetAmount, currency)} target` : 'No target on this phase.'
+    },
+    {
+      label: 'Daily Loss',
+      value: metrics.dailyAllowed === null ? 'N/A' : `${moneyValue(metrics.dailyUsed, currency)} / ${moneyValue(metrics.dailyAllowed, currency)}`,
+      progress: dailyProgress,
+      center: dailyProgress === null ? 'N/A' : `${n(rulePct(dailyProgress), 0)}%`,
+      state: ringStatus(metrics.dailyUsed, metrics.dailyAllowed),
+      detail: metrics.dailyFloor === null ? 'No daily loss in this rule pack.' : `Floor ${moneyValue(metrics.dailyFloor, currency)}, remaining ${moneyValue(metrics.dailyRemaining, currency)}.`
+    },
+    {
+      label: rule?.maxLossLabel || 'Maximum Loss',
+      value: metrics.maxAllowed === null ? 'N/A' : `${moneyValue(metrics.maxUsed, currency)} / ${moneyValue(metrics.maxAllowed, currency)}`,
+      progress: maxProgress,
+      center: maxProgress === null ? 'N/A' : `${n(rulePct(maxProgress), 0)}%`,
+      state: ringStatus(metrics.maxUsed, metrics.maxAllowed),
+      detail: metrics.maxFloor === null ? 'No maximum loss in this rule pack.' : `Breach level ${moneyValue(metrics.maxFloor, currency)}, remaining ${moneyValue(metrics.maxRemaining, currency)}.`
+    },
+    {
+      label: requiredDayLabel,
+      value: metrics.requiredDays ? `${metrics.dayObjectiveCount} / ${metrics.requiredDays}` : 'N/A',
+      progress: dayProgress,
+      center: dayProgress === null ? 'N/A' : `${n(rulePct(dayProgress), 0)}%`,
+      state: metrics.requiredDays ? (metrics.dayObjectiveCount >= metrics.requiredDays ? 'pass' : 'watch') : 'neutral',
+      detail: rule?.profitableDaysRequired ? `Zero reward rule uses profitable days of at least ${moneyValue(metrics.profitableDayFloor, currency)}.` : selectedPhase.days ? `${selectedPhase.label} needs ${selectedPhase.days} minimum day(s).` : 'No minimum day rule for this phase.'
+    },
+    {
+      label: 'Consistency',
+      value: metrics.consistencyAllowed ? `${n(metrics.consistencyScore, 2)}% / ${metrics.consistencyAllowed}%` : 'N/A',
+      progress: consistencyProgress,
+      center: metrics.consistencyAllowed ? `${n(metrics.consistencyScore, 0)}%` : 'N/A',
+      state: !metrics.consistencyAllowed || metrics.positiveProfit <= 0 ? 'neutral' : metrics.consistencyScore <= metrics.consistencyAllowed ? 'pass' : 'breach',
+      detail: metrics.consistencyAllowed ? `Top day ${moneyValue(metrics.consistencyTopDay, currency)}. ${rule.consistencyScope}.` : 'No consistency rule in this pack.'
+    },
+    {
+      label: metrics.zeroMaxRiskAmount ? 'Floating Risk' : 'Lot Limit',
+      value: metrics.zeroMaxRiskAmount ? `${moneyValue(metrics.openFloatingLoss, currency)} / ${moneyValue(metrics.zeroMaxRiskAmount, currency)}` : `${n(metrics.maxOpenLots, 2)} / ${COMMON_FP_RULES.lotLimit} lots`,
+      progress: riskProgress,
+      center: `${n(rulePct(riskProgress), 0)}%`,
+      state: metrics.zeroMaxRiskAmount ? ringStatus(metrics.openFloatingLoss, metrics.zeroMaxRiskAmount) : ringStatus(metrics.maxOpenLots, COMMON_FP_RULES.lotLimit),
+      detail: metrics.zeroMaxRiskAmount ? `Zero risk cap is ${rule.maxRiskPct}% of initial size.` : `Single click limit. Idea risk guide: ${riskIdeaPct}% (${moneyValue(riskIdeaAmount, currency)}).`
+    }
+  ]
+
+  const clearChecks = objectives.filter(card => card.state === 'pass').length
+  const statusText = state?.updated_at ? `Live ${formatClock(state.updated_at)}` : 'Waiting for live state'
+  const accountSizeSource = metrics.explicitAccountSize
+    ? accountSizeMode === ACCOUNT_SIZE_CUSTOM ? 'Custom' : 'Selected'
+    : metrics.inferredAccountSize ? 'Auto'
+      : 'Fallback'
+
+  if (!companyInfo?.hasRules) {
+    return (
+      <section className="rulesPage">
+        <div className="glass panel rulesControlPanel">
+          <div className="panelHeader">
+            <div className="panelIcon"><ListChecks /></div>
+            <div>
+              <p className="sectionEyebrow">Rules Dashboard</p>
+              <h2>Account Rule Pack</h2>
+            </div>
+          </div>
+          <div className="rulesControlGrid">
+            <label>Company<select value={company} onChange={e => setCompany(e.target.value)}>{RULE_COMPANIES.map(x => <option value={x.id} key={x.id}>{x.label}</option>)}</select></label>
+          </div>
+          <div className="emptyState">No rule pack is configured for this company yet.</div>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="rulesPage">
+      <section className="glass rulesHero ruleDashboardHero">
+        <div>
+          <p className="sectionEyebrow">FundingPips Rules</p>
+          <h1>{rule.label}</h1>
+          <p>{rule.summary} All objective values below are calculated from the latest MT5 balance, equity, open P/L, positions, and closed trade history.</p>
+          <div className="chips">
+            <div className="chip">Account Size <b>{moneyValue(metrics.accountSize, currency)}</b></div>
+            <div className="chip">Size Source <b>{accountSizeSource}</b></div>
+            <div className="chip">Phase <b>{selectedPhase.label}</b></div>
+            <div className="chip">Symbol <b>{s.symbol || selected?.symbol || '--'}</b></div>
+            <div className="chip">Update <b>{statusText}</b></div>
+          </div>
+        </div>
+        <div className="rulesScore">
+          <strong>{clearChecks}</strong>
+          <span>checks clear</span>
+        </div>
+      </section>
+
+      <section className="glass panel rulesControlPanel autoRulesControls">
+        <div className="panelHeader">
+          <div className="panelIcon"><SlidersHorizontal /></div>
+          <div>
+            <p className="sectionEyebrow">Selectors</p>
+            <h2>Company, Account, Phase</h2>
+          </div>
+        </div>
+        <div className="rulesControlGrid">
+          <label>Company<select value={company} onChange={e => setCompany(e.target.value)}>{RULE_COMPANIES.map(x => <option value={x.id} key={x.id}>{x.label}</option>)}</select></label>
+          <label>Account Type<select value={modelId} onChange={e => { setModelId(e.target.value); setPhaseIndex(0) }}>{Object.values(FUNDING_PIPS_RULES).map(x => <option value={x.id} key={x.id}>{x.label}</option>)}</select></label>
+          <label>Account Size<select value={accountSizeMode} onChange={e => setAccountSizeMode(e.target.value)}>
+            <option value={ACCOUNT_SIZE_AUTO}>Auto from MT5</option>
+            {accountSizeOptions.map(size => <option value={String(size)} key={size}>{moneyValue(size, currency)}</option>)}
+            <option value={ACCOUNT_SIZE_CUSTOM}>Custom / Scaled</option>
+          </select></label>
+          <label>Phase<select value={phaseIndex} onChange={e => setPhaseIndex(Number(e.target.value))}>{phases.map((x, i) => <option value={i} key={`${x.label}-${i}`}>{x.label}</option>)}</select></label>
+          {accountSizeMode === ACCOUNT_SIZE_CUSTOM && (
+            <label>Custom Account Size<input type="number" min="1" step="1000" value={customAccountSize} onChange={e => setCustomAccountSize(e.target.value)} placeholder="Example 120000" /></label>
+          )}
+        </div>
+      </section>
+
+      <section className="glass panel objectivesPanel">
+        <div className="panelHeader">
+          <div className="panelIcon"><Shield /></div>
+          <div>
+            <p className="sectionEyebrow">Objectives</p>
+            <h2>Live Funding Checks</h2>
+          </div>
+        </div>
+        <div className="objectivesGrid">
+          {objectives.map(card => <ObjectiveCard key={card.label} {...card} />)}
+        </div>
+      </section>
+
+      <section className="accountSnapshotGrid">
+        <div className="glass accountMetricCard">
+          <span>Balance</span>
+          <strong className={clsPL(metrics.currentBalance - metrics.accountSize)}>{moneyValue(metrics.currentBalance, currency)}</strong>
+        </div>
+        <div className="glass accountMetricCard">
+          <span>Equity</span>
+          <strong className={clsPL(metrics.currentEquity - metrics.accountSize)}>{moneyValue(metrics.currentEquity, currency)}</strong>
+        </div>
+        <div className="glass accountMetricCard">
+          <span>Open P/L</span>
+          <strong className={clsPL(metrics.openPL)}>{money(metrics.openPL, currency)}</strong>
+        </div>
+        <div className="glass accountMetricCard">
+          <span>Win Ratio</span>
+          <strong>{n(metrics.winRate, 0)}%</strong>
+        </div>
+      </section>
+
+      <section className="ruleDashboardGrid">
+        <div className="glass panel accountChartPanel">
+          <div className="panelHeader">
+            <div className="panelIcon"><BarChart3 /></div>
+            <div>
+              <p className="sectionEyebrow">Account Balance</p>
+              <h2>Balance, Equity, And Loss Floors</h2>
+            </div>
+          </div>
+          <AccountCurveChart metrics={metrics} />
+          <div className="lossInfoGrid">
+            <div><span>Max permitted loss</span><strong>{metrics.maxAllowed === null ? 'N/A' : moneyValue(metrics.maxAllowed, currency)}</strong></div>
+            <div><span>Today permitted loss</span><strong>{metrics.dailyAllowed === null ? 'N/A' : moneyValue(metrics.dailyAllowed, currency)}</strong></div>
+            <div><span>Today result</span><strong className={clsPL(numberValue(s.dayNet, 0))}>{money(numberValue(s.dayNet, 0), currency)}</strong></div>
+            <div><span>Target left</span><strong>{targetLeft === null ? 'N/A' : moneyValue(targetLeft, currency)}</strong></div>
+          </div>
+        </div>
+
+        <div className="rulesSideStack">
+          <div className="glass panel accountDataPanel">
+            <div className="panelHeader">
+              <div className="panelIcon"><Database /></div>
+              <div>
+                <p className="sectionEyebrow">Account Data</p>
+                <h2>MT5 Details</h2>
+              </div>
+            </div>
+            <div className="accountInfoList">
+              <AccountInfoRow icon={<KeyRound />} label="Login" value={s.accountLogin ? `#${s.accountLogin}` : '--'} />
+              <AccountInfoRow icon={<WalletCards />} label="Account Size" value={moneyValue(metrics.accountSize, currency)} />
+              <AccountInfoRow icon={<Server />} label="Platform" value={s.platform || 'MetaTrader 5'} />
+              <AccountInfoRow icon={<Database />} label="Server" value={s.accountServer || s.accountCompany || 'Waiting for EA'} />
+              <AccountInfoRow icon={<Activity />} label="Company" value={s.accountCompany || companyInfo.label} />
+            </div>
+          </div>
+
+          <div className="glass panel elapsedPanel">
+            <h2>Time Since First Trade</h2>
+            <div className="elapsedGrid">
+              <div><strong>{metrics.elapsed?.days ?? '--'}</strong><span>DAY</span></div>
+              <div><strong>{metrics.elapsed?.hours ?? '--'}</strong><span>HR</span></div>
+              <div><strong>{metrics.elapsed?.minutes ?? '--'}</strong><span>MIN</span></div>
+              <div><strong>{metrics.elapsed?.seconds ?? '--'}</strong><span>SEC</span></div>
+            </div>
+            <p>Start Date</p>
+            <strong>{metrics.firstTradeSec ? displayDateKey(dateKeyFromSeconds(metrics.firstTradeSec)) : '--'}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="rulesGrid">
+        <div className="glass panel statisticsPanel">
+          <div className="panelHeader">
+            <div className="panelIcon"><Gauge /></div>
+            <div>
+              <p className="sectionEyebrow">Statistics</p>
+              <h2>Trading Performance</h2>
+            </div>
+          </div>
+          <div className="statisticsGrid">
+            <StatValue label="Number of Trades" value={metrics.totalTrades} />
+            <StatValue label="Average Winning Trade" value={metrics.avgWin === null ? '--' : moneyValue(metrics.avgWin, currency)} mood="pos" />
+            <StatValue label="Highwater Mark Balance" value={moneyValue(metrics.highwater, currency)} />
+            <StatValue label="Average Losing Trade" value={metrics.avgLoss === null ? '--' : moneyValue(metrics.avgLoss, currency)} mood="neg" />
+            <StatValue label="Win Rate %" value={`${n(metrics.winRate, 0)}%`} />
+            <StatValue label="Average RRR" value={metrics.avgRR === null ? '--' : n(metrics.avgRR, 2)} />
+            <StatValue label="Loss Rate %" value={`${n(metrics.lossRate, 0)}%`} />
+            <StatValue label="Expectancy" value={metrics.expectancy === null ? '--' : moneyValue(metrics.expectancy, currency)} mood={metrics.expectancy >= 0 ? 'pos' : 'neg'} />
+            <StatValue label="Consistency Top Day" value={moneyValue(metrics.consistencyTopDay, currency)} />
+          </div>
+        </div>
+
+        <div className="glass panel dailySummaryPanel">
+          <div className="panelHeader">
+            <div className="panelIcon"><Clock3 /></div>
+            <div>
+              <p className="sectionEyebrow">Daily Summary</p>
+              <h2>Balance By Day</h2>
+            </div>
+          </div>
+          <DailySummaryTable rows={metrics.dailyRows} currency={currency} />
+        </div>
+      </section>
+
+      <section className="rulesGrid">
+        <div className="glass panel">
+          <div className="panelHeader">
+            <div className="panelIcon"><ListChecks /></div>
+            <div>
+              <p className="sectionEyebrow">Path</p>
+              <h2>Account Flow</h2>
+            </div>
+          </div>
+          <div className="phaseFlow">
+            {phases.map((phase, index) => (
+              <div className={`phaseNode ${index === phaseIndex ? 'active' : ''}`} key={`${phase.label}-${index}`}>
+                <span>{index + 1}</span>
+                <strong>{phase.label}</strong>
+                <p>{phase.target ? `${phase.target}% target` : 'No profit target'}</p>
+                <small>{phase.days ? `${phase.days} minimum day(s)` : 'Ongoing'}</small>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="glass panel">
+          <div className="panelHeader">
+            <div className="panelIcon"><AlertTriangle /></div>
+            <div>
+              <p className="sectionEyebrow">Hard And Soft Rules</p>
+              <h2>Trade Conditions</h2>
+            </div>
+          </div>
+          <div className="conditionList">
+            {[rule.news, rule.weekend, rule.rewardText, ...(rule.specialRules || []), ...COMMON_FP_RULES.generalRules].filter(Boolean).map((text, index) => (
+              <div className="conditionItem" key={index}><span>{index + 1}</span><p>{text}</p></div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="rulesGrid">
+        <RulesTable title="Commission" rows={rule.commissions || []} columns={['Instrument', 'Standard', 'Swap-Free MT5']} />
+        <RulesTable title="Leverage" rows={rule.leverage || []} columns={['Instrument', 'Standard', 'Swap-Free MT5']} />
+      </section>
+
+      <section className="glass panel">
+        <div className="panelHeader">
+          <div className="panelIcon"><Database /></div>
+          <div>
+            <p className="sectionEyebrow">Dynamic Leverage</p>
+            <h2>Master Account Tier Diagram</h2>
+          </div>
+        </div>
+        <div className="tierDiagram">
+          {COMMON_FP_RULES.dynamicLeverage.map(([lots, lev]) => (
+            <div className="tierStep" key={lots}>
+              <span>{lots}</span>
+              <strong>{lev}</strong>
+            </div>
+          ))}
+        </div>
+        <p className="rulesFootnote">Rules are based on the local FundingPips Help Center PDF crawl and official FundingPips help articles. Re-check FundingPips before taking high-stakes action because prop firm rules can change.</p>
+      </section>
+    </section>
+  )
+}
+
+function ObjectiveCard({ label, value, progress, center, state, detail }) {
+  const pctValue = progress === null || progress === undefined ? null : rulePct(progress)
+  return (
+    <div className={`objectiveCard ${state || 'neutral'}`}>
+      <h3>{label}</h3>
+      {pctValue === null ? (
+        <div className="objectiveValueOnly"><strong>{value}</strong></div>
+      ) : (
+        <div className="objectiveRing" style={{ '--pct': pctValue }}>
+          <span>{center || `${n(pctValue, 0)}%`}</span>
+        </div>
+      )}
+      <strong className="objectiveValue">{value}</strong>
+      <p>{detail}</p>
+    </div>
+  )
+}
+
+function AccountInfoRow({ icon, label, value }) {
+  return (
+    <div className="accountInfoRow">
+      <span>{icon}</span>
+      <b>{label}</b>
+      <strong>{value || '--'}</strong>
+    </div>
+  )
+}
+
+function StatValue({ label, value, mood }) {
+  return (
+    <div className="statValue">
+      <span>{label}</span>
+      <strong className={mood || ''}>{value}</strong>
+    </div>
+  )
+}
+
+function AccountCurveChart({ metrics }) {
+  const rows = metrics.chartRows.length ? metrics.chartRows : [{ key: dateKeyFromSeconds(Date.now() / 1000), balance: metrics.currentBalance, equity: metrics.currentEquity }]
+  const width = 720
+  const height = 280
+  const pad = 34
+  const values = rows.flatMap(row => [row.balance, row.equity, metrics.dailyFloor, metrics.maxFloor]).filter(v => Number.isFinite(Number(v)))
+  const minValue = Math.min(...values, metrics.accountSize) - Math.max(20, metrics.accountSize * 0.01)
+  const maxValue = Math.max(...values, metrics.accountSize) + Math.max(20, metrics.accountSize * 0.01)
+  const xFor = index => pad + (rows.length <= 1 ? (width - pad * 2) / 2 : index * (width - pad * 2) / (rows.length - 1))
+  const yFor = value => {
+    if (maxValue === minValue) return height / 2
+    return height - pad - (Number(value) - minValue) * (height - pad * 2) / (maxValue - minValue)
+  }
+  const pathFor = key => rows.map((row, index) => `${index === 0 ? 'M' : 'L'} ${xFor(index).toFixed(1)} ${yFor(row[key]).toFixed(1)}`).join(' ')
+  const floorLine = value => Number.isFinite(Number(value)) ? `M ${pad} ${yFor(value).toFixed(1)} L ${width - pad} ${yFor(value).toFixed(1)}` : ''
+  const labels = [maxValue, (maxValue + minValue) / 2, minValue]
+
+  return (
+    <div className="accountCurve">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Account balance chart">
+        {labels.map((value, index) => (
+          <g key={index}>
+            <line x1={pad} x2={width - pad} y1={yFor(value)} y2={yFor(value)} />
+            <text x="4" y={yFor(value) + 4}>{moneyValue(value, metrics.currency)}</text>
+          </g>
+        ))}
+        {metrics.maxFloor !== null && <path className="floor maxFloor" d={floorLine(metrics.maxFloor)} />}
+        {metrics.dailyFloor !== null && <path className="floor dailyFloor" d={floorLine(metrics.dailyFloor)} />}
+        <path className="equityLine" d={pathFor('equity')} />
+        <path className="balanceLine" d={pathFor('balance')} />
+        {rows.map((row, index) => (
+          <circle key={row.key} cx={xFor(index)} cy={yFor(row.balance)} r="4" />
+        ))}
+      </svg>
+      <div className="chartLegend">
+        <span className="balanceLegend">Balance</span>
+        <span className="equityLegend">Equity</span>
+        <span className="dailyLegend">Daily floor</span>
+        <span className="maxLegend">Max floor</span>
+      </div>
+    </div>
+  )
+}
+
+function DailySummaryTable({ rows, currency }) {
+  const visible = rows.slice(0, 8)
+  if (!visible.length) return <div className="emptyState compact">No daily data yet.</div>
+  return (
+    <div className="dailyTableWrap">
+      <table className="dailyTable">
+        <thead><tr><th>Date</th><th>Balance</th><th>Equity</th><th>Result</th></tr></thead>
+        <tbody>
+          {visible.map(row => (
+            <tr key={row.key}>
+              <td data-label="Date">{displayDateKey(row.key)}</td>
+              <td data-label="Balance">{moneyValue(row.balance, currency)}</td>
+              <td data-label="Equity">{moneyValue(row.equity, currency)}</td>
+              <td data-label="Result"><strong className={clsPL(row.net)}>{money(row.net, currency)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function RuleBar({ label, value, note, danger = false, inverse = false }) {
+  const pctValue = rulePct(value, inverse)
+  const raw = Math.max(0, Math.min(100, Number(value) || 0))
+  const isHot = danger ? raw >= 80 : false
+  return (
+    <div className="ruleBar">
+      <div className="ruleBarTop"><span>{label}</span><strong>{n(raw, 1)}%</strong></div>
+      <div className={`ruleTrack ${isHot ? 'hot' : ''}`}><span style={{ width: `${pctValue}%` }} /></div>
+      <p>{note}</p>
+    </div>
+  )
+}
+
+function RulesTable({ title, rows, columns }) {
+  return (
+    <div className="glass panel">
+      <div className="panelHeader">
+        <div className="panelIcon"><Database /></div>
+        <div>
+          <p className="sectionEyebrow">Reference</p>
+          <h2>{title}</h2>
+        </div>
+      </div>
+      {rows.length ? (
+        <div className="rulesTableWrap">
+          <table className="rulesTable">
+            <thead><tr>{columns.map(x => <th key={x}>{x}</th>)}</tr></thead>
+            <tbody>{rows.map((row, i) => <tr key={i}>{row.map((cell, j) => <td key={`${i}-${j}`}>{cell}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="emptyState compact">No table values published in this rule pack.</div>
+      )}
+    </div>
+  )
+}
+
 function TradeHistoryPage({ state }) {
   const s = state?.state || {}
   const currency = s.currency || ''
@@ -1052,6 +1974,7 @@ function TradeHistoryPage({ state }) {
               <thead>
                 <tr>
                   <th>Close Time</th>
+                  <th>Source</th>
                   <th>Type</th>
                   <th>Lot</th>
                   <th>Entry</th>
@@ -1066,6 +1989,7 @@ function TradeHistoryPage({ state }) {
                 {rows.map((row, index) => (
                   <tr key={row.id || `${row.positionId || 'trade'}-${index}`}>
                     <td data-label="Close Time">{formatHistoryTime(row.closeTime || row.closeTimeSec)}</td>
+                    <td data-label="Source"><span className={`sourcePill ${row.source === 'Manual' ? 'manual' : 'ea'}`}>{row.source || 'EA'}</span></td>
                     <td data-label="Type"><span className={`sidePill ${row.type === 'BUY' ? 'buy' : 'sell'}`}>{row.type || '--'}</span></td>
                     <td data-label="Lot">{n(row.volume, 2)}</td>
                     <td data-label="Entry">{row.entryPrice ?? '--'}</td>
@@ -1236,6 +2160,8 @@ function Dashboard({ session }) {
         <TelegramSettingsPage session={session} />
       ) : view === 'history' ? (
         <TradeHistoryPage state={state} />
+      ) : view === 'rules' ? (
+        <RulesPage state={state} selected={selected} />
       ) : (
         <>
           <StatusHero state={state} selected={selected} />
