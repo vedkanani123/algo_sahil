@@ -9,6 +9,7 @@ import {
   ArrowUpCircle,
   BarChart3,
   Bell,
+  ChevronDown,
   CheckCircle2,
   CircleDot,
   Clock3,
@@ -728,9 +729,61 @@ function MissingConfig() {
   )
 }
 
+function CollapsibleSection({ id, title, eyebrow, icon, children, defaultOpen = true, className = '', bodyClassName = '' }) {
+  const storageKey = `tcx-section-open-${id}`
+  const [open, setOpen] = useState(defaultOpen)
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(storageKey)
+      if (saved !== null) setOpen(saved === 'true')
+    } catch {
+      // Collapsing is a UI convenience; it should never block dashboard use.
+    }
+  }, [storageKey])
+
+  function toggleOpen() {
+    setOpen(current => {
+      const next = !current
+      try {
+        window.localStorage.setItem(storageKey, String(next))
+      } catch {
+        // Ignore storage failures.
+      }
+      return next
+    })
+  }
+
+  return (
+    <section className={`collapsibleSection glass ${open ? 'open' : 'closed'} ${className}`}>
+      <button type="button" className="collapseHeader" onClick={toggleOpen} aria-expanded={open}>
+        <span className="collapseTitle">
+          <span className="collapseIcon">{icon}</span>
+          <span>
+            {eyebrow && <small>{eyebrow}</small>}
+            <strong>{title}</strong>
+          </span>
+        </span>
+        <span className="collapseControl" title={open ? 'Minimize section' : 'Maximize section'}>
+          <ChevronDown size={18} />
+        </span>
+      </button>
+      {open && <div className={`collapseBody ${bodyClassName}`}>{children}</div>}
+    </section>
+  )
+}
+
 function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, onDeleteEa, lastSyncAt, isRefreshing, view, setView }) {
   const [isEditing, setIsEditing] = useState(false)
   const [showEmail, setShowEmail] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('tcx-topbar-open')
+      return saved === null ? true : saved === 'true'
+    } catch {
+      return true
+    }
+  })
   const [editName, setEditName] = useState('')
   const [editSymbol, setEditSymbol] = useState('')
 
@@ -753,8 +806,20 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
     }
   }
 
+  function toggleMenuOpen() {
+    setMenuOpen(current => {
+      const next = !current
+      try {
+        window.localStorage.setItem('tcx-topbar-open', String(next))
+      } catch {
+        // Ignore storage failures.
+      }
+      return next
+    })
+  }
+
   return (
-    <header className="topbar glass">
+    <header className={`topbar glass ${menuOpen ? 'open' : 'topbarClosed'}`}>
       <div className="topbarLeft">
         <div className="brand">
           <div className="logo"><Zap size={22} /></div>
@@ -769,6 +834,9 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
               )}
             </div>
           </div>
+          <button type="button" className="topbarCollapseBtn" onClick={toggleMenuOpen} title={menuOpen ? 'Minimize menu' : 'Maximize menu'} aria-expanded={menuOpen}>
+            <ChevronDown size={18} />
+          </button>
         </div>
 
         <div className={`topbarSelect ${isEditing ? 'editing' : ''}`}>
@@ -2164,12 +2232,24 @@ function Dashboard({ session }) {
         <RulesPage state={state} selected={selected} />
       ) : (
         <>
-          <StatusHero state={state} selected={selected} />
-          <StatCards state={state} />
-          <CommandPanel session={session} selected={selected} state={state} reloadCommands={() => loadCommands(selectedId)} />
-          <PositionPanel state={state} />
-          <StructurePanel state={state} />
-          <CommandsLog commands={commands} />
+          <CollapsibleSection id={`${selectedId}-status`} title="Status" eyebrow="Live EA" icon={<Activity />} bodyClassName="flushBody">
+            <StatusHero state={state} selected={selected} />
+          </CollapsibleSection>
+          <CollapsibleSection id={`${selectedId}-stats`} title="Account Stats" eyebrow="Money & Risk" icon={<WalletCards />} bodyClassName="flushBody">
+            <StatCards state={state} />
+          </CollapsibleSection>
+          <CollapsibleSection id={`${selectedId}-controls`} title="Trade Controls" eyebrow="Execution" icon={<PlayCircle />} bodyClassName="flushBody">
+            <CommandPanel session={session} selected={selected} state={state} reloadCommands={() => loadCommands(selectedId)} />
+          </CollapsibleSection>
+          <CollapsibleSection id={`${selectedId}-positions`} title="Positions" eyebrow="Open Trades" icon={<Gauge />} bodyClassName="flushBody">
+            <PositionPanel state={state} />
+          </CollapsibleSection>
+          <CollapsibleSection id={`${selectedId}-structure`} title="Market Structure" eyebrow="Model Checks" icon={<Zap />} bodyClassName="flushBody" defaultOpen={false}>
+            <StructurePanel state={state} />
+          </CollapsibleSection>
+          <CollapsibleSection id={`${selectedId}-commands`} title="Command Log" eyebrow="History" icon={<KeyRound />} bodyClassName="flushBody" defaultOpen={false}>
+            <CommandsLog commands={commands} />
+          </CollapsibleSection>
         </>
       )}
       <div className="footer"><Lock size={14} /> Each user sees only their own EAs via Supabase RLS. EA commands are verified by EA ID and private token.</div>

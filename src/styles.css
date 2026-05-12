@@ -503,6 +503,34 @@ code,
   height: 14px;
 }
 
+.topbarCollapseBtn {
+  width: 34px;
+  min-height: 34px;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.topbar.open .topbarCollapseBtn svg {
+  transform: rotate(180deg);
+}
+
+.topbarClosed {
+  grid-template-columns: 1fr;
+}
+
+.topbarClosed .topbarLeft {
+  grid-template-columns: 1fr;
+}
+
+.topbarClosed .topbarSelect,
+.topbarClosed .topbarActions {
+  display: none;
+}
+
 .topbarSelect {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -741,6 +769,104 @@ code,
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.collapsibleSection {
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.collapseHeader {
+  width: 100%;
+  min-height: 58px;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.collapsibleSection.closed .collapseHeader {
+  border-bottom: 0;
+}
+
+.collapseTitle {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+}
+
+.collapseIcon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--muted);
+}
+
+.collapseIcon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.collapseTitle small {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.collapseTitle strong {
+  display: block;
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.15;
+}
+
+.collapseControl {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.collapsibleSection.open .collapseControl svg {
+  transform: rotate(180deg);
+}
+
+.collapseBody {
+  padding: 12px;
+}
+
+.collapseBody.flushBody {
+  padding: 12px;
+}
+
+.collapseBody.flushBody > .hero,
+.collapseBody.flushBody > .statGrid,
+.collapseBody.flushBody > .mainLayout,
+.collapseBody.flushBody > .positionPanel,
+.collapseBody.flushBody > .structureContainer,
+.collapseBody.flushBody > .panel {
+  margin-bottom: 0;
+}
+
+.collapseBody.flushBody > .glass {
+  box-shadow: none;
 }
 
 .statGrid {
@@ -2292,9 +2418,23 @@ code,
 }
 
 @media (max-width: 620px) {
+  body {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0) 220px),
+      linear-gradient(180deg, #111216 0%, #101114 100%);
+  }
+
+  .app {
+    padding: 8px;
+  }
+
   .loginShell,
   .setupShell {
     padding: 12px;
+  }
+
+  .glass {
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
   }
 
   .loginCard,
@@ -2302,7 +2442,7 @@ code,
   .panel,
   .hero,
   .rulesHero {
-    padding: 14px;
+    padding: 12px;
   }
 
   .loginIntro h1 {
@@ -2329,12 +2469,118 @@ code,
     grid-template-columns: 1fr;
   }
 
+  .topbar {
+    gap: 10px;
+    padding: 10px;
+    margin-bottom: 12px;
+  }
+
+  .topbarLeft {
+    gap: 10px;
+  }
+
+  .brand {
+    gap: 10px;
+  }
+
+  .topbarClosed {
+    padding: 8px 10px;
+  }
+
+  .logo {
+    width: 40px;
+    height: 40px;
+  }
+
+  .brandText h2 {
+    font-size: 20px;
+    line-height: 1.05;
+  }
+
+  .emailPrivacy span {
+    max-width: 220px;
+    font-size: 12px;
+  }
+
+  .topbarSelect:not(.editing) {
+    grid-template-columns: minmax(0, 1fr) 42px 42px;
+    align-items: stretch;
+  }
+
+  .topbarSelect:not(.editing) select {
+    min-height: 42px;
+    min-width: 0;
+    padding: 9px 10px;
+    font-size: 15px;
+    font-weight: 800;
+  }
+
+  .topbarSelect:not(.editing) .iconTextBtn {
+    width: 42px;
+    min-height: 42px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
+  }
+
+  .topbarSelect:not(.editing) .iconTextBtn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .topbarSelect.editing {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .topbarSelect.editing input {
+    grid-column: 1 / -1;
+  }
+
+  .topbarSelect.editing button {
+    min-height: 40px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
   .objectiveCard {
-    min-height: 218px;
+    min-height: 196px;
+    padding: 14px;
+    gap: 10px;
+  }
+
+  .objectiveRing {
+    width: 96px;
+    height: 96px;
+  }
+
+  .objectiveRing::before {
+    inset: 9px;
+  }
+
+  .objectiveRing span {
+    font-size: 21px;
+  }
+
+  .objectiveValueOnly {
+    min-height: 96px;
+  }
+
+  .objectiveValueOnly strong {
+    font-size: 26px;
+  }
+
+  .objectiveCard p {
+    font-size: 11px;
   }
 
   .accountMetricCard strong {
     font-size: 26px;
+  }
+
+  .accountMetricCard,
+  .lossInfoGrid div {
+    min-height: 94px;
+    padding: 14px;
   }
 
   .accountCurve svg {
@@ -2386,15 +2632,158 @@ code,
   }
 
   .bigBtns button {
-    min-height: 76px;
+    min-height: 64px;
+    font-size: 17px;
   }
 
   .topbarActions {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 
   .viewToggle {
+    grid-column: 1 / -1;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .viewToggle button {
+    min-height: 38px;
+    padding: 7px 6px;
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  .viewToggle button svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .syncBadge {
+    min-height: 40px;
+    justify-content: center;
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+
+  .topbarActions > button {
+    min-height: 40px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .topbarActions > button svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .collapsibleSection {
+    margin-bottom: 10px;
+  }
+
+  .collapseHeader {
+    min-height: 50px;
+    padding: 8px 10px;
+  }
+
+  .collapseIcon,
+  .collapseControl {
+    width: 32px;
+    height: 32px;
+  }
+
+  .collapseTitle {
+    gap: 8px;
+  }
+
+  .collapseTitle small {
+    font-size: 10px;
+  }
+
+  .collapseTitle strong {
+    font-size: 15px;
+  }
+
+  .collapseBody,
+  .collapseBody.flushBody {
+    padding: 8px;
+  }
+
+  .hero {
+    gap: 12px;
+    margin-bottom: 12px;
+    border-left-width: 4px;
+  }
+
+  .statusMeta {
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .onlineRow,
+  .symbolPill {
+    min-height: 30px;
+    padding: 6px 8px;
+    gap: 6px;
+    font-size: 11px;
+  }
+
+  .onlineRow svg,
+  .symbolPill svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .hero h1 {
+    font-size: 30px;
+  }
+
+  .hero p {
+    margin-top: 6px;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .chips {
+    gap: 6px;
+    margin-top: 12px;
+  }
+
+  .chip {
+    min-height: 30px;
+    padding: 6px 8px;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .heroRight {
+    min-height: 142px;
+  }
+
+  .scoreRing {
+    width: 104px;
+    height: 104px;
+  }
+
+  .scoreRing::before {
+    inset: 8px;
+  }
+
+  .scoreValue span {
+    font-size: 32px;
+  }
+
+  .scoreValue small {
+    font-size: 14px;
+  }
+
+  .statGrid,
+  .mainLayout,
+  .structureContainer,
+  .historySummary,
+  .rulesPage {
+    gap: 10px;
   }
 
   .statGrid {
