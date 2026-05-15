@@ -978,7 +978,13 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
   const [pcDirty, setPcDirty] = useState(false)
   const [pendingRisk, setPendingRisk] = useState(null)
   const [pendingPc, setPendingPc] = useState(null)
+  const [optimisticControls, setOptimisticControls] = useState({})
   const currency = s.currency || 'Money'
+  const controlState = {
+    partialsOn: optimisticControls.partialsOn ?? Boolean(s.partialsOn),
+    secondEntryOn: optimisticControls.secondEntryOn ?? Boolean(s.secondEntryOn),
+    firstTrailOn: optimisticControls.firstTrailOn ?? Boolean(s.firstTrailOn)
+  }
 
   useEffect(() => {
     if (!s) return
@@ -996,7 +1002,14 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
     if (!pcDirty && !pendingPc) {
       setPc(p => ({ pc1: String(s.pc1 ?? p.pc1), pc2: String(s.pc2 ?? p.pc2), pc3: String(s.pc3 ?? p.pc3) }))
     }
-  }, [state?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, riskDirty, pcDirty, pendingRisk, pendingPc])
+    setOptimisticControls(prev => {
+      const next = { ...prev }
+      if (next.partialsOn !== undefined && Boolean(s.partialsOn) === next.partialsOn) delete next.partialsOn
+      if (next.secondEntryOn !== undefined && Boolean(s.secondEntryOn) === next.secondEntryOn) delete next.secondEntryOn
+      if (next.firstTrailOn !== undefined && Boolean(s.firstTrailOn) === next.firstTrailOn) delete next.firstTrailOn
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next
+    })
+  }, [state?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, s.partialsOn, s.secondEntryOn, s.firstTrailOn, riskDirty, pcDirty, pendingRisk, pendingPc])
 
   async function cmd(action, payload = {}, options = {}) {
     if (!selected?.id) return alert('Create/select EA first')
@@ -1058,24 +1071,54 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
     const next = {
       pc1: clampNumber(pc.pc1, 0, 100),
       pc2: clampNumber(pc.pc2, 0, 100),
-      pc3: clampNumber(pc.pc3, 0, 100)
+      pc3: clampNumber(pc.pc3, 0, 100),
+      partialsOn: controlState.partialsOn,
+      secondEntryOn: controlState.secondEntryOn,
+      firstTrailOn: controlState.firstTrailOn
     }
     const ok = await cmd(ACTIONS.SET_PARTIALS, next)
     if (ok) setPendingPc(next)
   }
 
-  async function toggleSecondEntry() {
-    const nextOn = !s.secondEntryOn
-    const directOk = await cmd(ACTIONS.TOGGLE_SECOND_ENTRY, {}, { silent: true })
-    if (directOk) return
-
-    const fallback = {
+  async function sendControlSettings(nextControls = {}, extraPayload = {}) {
+    const payload = {
       pc1: clampNumber(pc.pc1, 0, 100),
       pc2: clampNumber(pc.pc2, 0, 100),
       pc3: clampNumber(pc.pc3, 0, 100),
-      secondEntryOn: nextOn
+      partialsOn: controlState.partialsOn,
+      secondEntryOn: controlState.secondEntryOn,
+      firstTrailOn: controlState.firstTrailOn,
+      ...nextControls,
+      ...extraPayload
     }
-    await cmd(ACTIONS.SET_PARTIALS, fallback)
+    if (Object.keys(nextControls).length) {
+      setOptimisticControls(prev => ({ ...prev, ...nextControls }))
+    }
+    const ok = await cmd(ACTIONS.SET_PARTIALS, payload)
+    if (!ok && Object.keys(nextControls).length) {
+      setOptimisticControls(prev => {
+        const copy = { ...prev }
+        Object.keys(nextControls).forEach(key => delete copy[key])
+        return copy
+      })
+    }
+    return ok
+  }
+
+  function togglePartials() {
+    return sendControlSettings({ partialsOn: !controlState.partialsOn })
+  }
+
+  function toggleSecondEntry() {
+    return sendControlSettings({ secondEntryOn: !controlState.secondEntryOn })
+  }
+
+  function toggleFirstTrail() {
+    return sendControlSettings({ firstTrailOn: !controlState.firstTrailOn })
+  }
+
+  function firstBreakEven() {
+    return sendControlSettings({}, { firstBreakEven: true })
   }
 
   return (
@@ -1103,6 +1146,7 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
         <div className="dangerZone">
           <button onClick={() => cmd(ACTIONS.CLOSE_50)} disabled={Boolean(busy)}><SlidersHorizontal /> CLOSE 50%</button>
           <button onClick={() => cmd(ACTIONS.BREAK_EVEN)} disabled={Boolean(busy)}><Shield /> BREAK EVEN</button>
+          <button onClick={firstBreakEven} disabled={Boolean(busy)}><Shield /> 1ST BE</button>
           <button className="redBtn" onClick={() => window.confirm('Close all EA positions?') && cmd(ACTIONS.CLOSE_ALL)} disabled={Boolean(busy)}><XCircle /> CLOSE ALL</button>
         </div>
       </div>
@@ -1129,9 +1173,9 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
         <div className="modeToggle" role="group" aria-label="EA mode controls">
           <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'safe' })} className={!s.advanced ? 'active' : ''} disabled={Boolean(busy)}>Safe</button>
           <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'advanced' })} className={s.advanced ? 'active' : ''} disabled={Boolean(busy)}>Advanced</button>
-          <button onClick={() => cmd(ACTIONS.TOGGLE_PARTIALS)} className={s.partialsOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>Partials {s.partialsOn ? 'ON' : 'OFF'}</button>
-          <button onClick={toggleSecondEntry} className={s.secondEntryOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>2nd {s.secondEntryOn ? 'ON' : 'OFF'}</button>
-          <button onClick={() => cmd(ACTIONS.TOGGLE_FIRST_TRAIL)} className={s.firstTrailOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>1st Trail {s.firstTrailOn ? 'ON' : 'OFF'}</button>
+          <button onClick={togglePartials} className={controlState.partialsOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>Partials {controlState.partialsOn ? 'ON' : 'OFF'}</button>
+          <button onClick={toggleSecondEntry} className={controlState.secondEntryOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>2nd {controlState.secondEntryOn ? 'ON' : 'OFF'}</button>
+          <button onClick={toggleFirstTrail} className={controlState.firstTrailOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>1st Trail {controlState.firstTrailOn ? 'ON' : 'OFF'}</button>
         </div>
 
         <div className="inlineStatus">{s.secondEntryStatus || '2nd entry OFF'}</div>

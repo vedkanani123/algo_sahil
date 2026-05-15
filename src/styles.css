@@ -992,9 +992,16 @@ code,
 .miniBtns,
 .dangerZone {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 10px;
+}
+
+.miniBtns {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dangerZone {
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
 }
 
 .miniBtns button,

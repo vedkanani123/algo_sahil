@@ -3,7 +3,7 @@
 //| Indicator-matched model detection with armed BUY/SELL execution   |
 //+------------------------------------------------------------------+
 #property copyright "Three Candle Execution Controller"
-#property version   "1.293"
+#property version   "1.294"
 #property description "Attach to a chart as an Expert Advisor. BUY/SELL buttons arm the next matching 3-candle model."
 #property strict
 
@@ -125,6 +125,7 @@ string UI = "TCX_UI_";
 #define B_MODE_ADV  "TCX_UI_B_MODE_ADV"
 #define B_SECOND    "TCX_UI_B_SECOND"
 #define B_FIRST_TRAIL "TCX_UI_B_FIRST_TRAIL"
+#define B_FIRST_BE  "TCX_UI_B_FIRST_BE"
 
 #define E_LOT       "TCX_UI_E_LOT"
 #define E_RISK      "TCX_UI_E_RISK"
@@ -2519,6 +2520,28 @@ void MoveToBreakEven()
       SetLastMessage("Break even already protected",clrGold);
 }
 
+void MoveFirstTradeToBreakEven()
+{
+   if(!SelectFirstEntryPosition())
+   {
+      SetLastMessage("No first trade for break even",clrGold);
+      return;
+   }
+
+   ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+   string reason="";
+   if(MoveTicketToBreakEven(ticket,reason))
+   {
+      if(reason=="already protected")
+         SetLastMessage("First trade already protected",clrGold);
+      else
+         SetLastMessage("First trade SL moved to break even",clrLime);
+      return;
+   }
+
+   SetLastMessage("First BE failed: "+reason,clrTomato);
+}
+
 void CloseAllPositions()
 {
    bool any=false;
@@ -3482,14 +3505,15 @@ void BuildPanel()
    Txt(UI+"MSGT","MESSAGE",x+pad+16,cy+9,soft,7,true,25);
    Txt(UI+"MSG","Ready",x+pad+16,cy+28,C'150,165,195',7,true,25);
 
-   int manageBtnW=62;
-   int manageGap=8;
-   int manageX=x+pad+inner-(manageBtnW*4+manageGap*3)-12;
+   int manageBtnW=54;
+   int manageGap=6;
+   int manageX=x+pad+inner-(manageBtnW*5+manageGap*4)-12;
    int manageY=cy+14;
    Btn(B_CLOSE,"CLOSE",manageX,manageY,manageBtnW,26,C'80,12,18',clrWhite,7);
    Btn(B_BE,"BE",manageX+manageBtnW+manageGap,manageY,manageBtnW,26,C'0,70,115',clrWhite,7);
-   Btn(B_CLOSE50,"50%",manageX+(manageBtnW+manageGap)*2,manageY,manageBtnW,26,C'90,65,0',clrWhite,7);
-   Btn(B_CLOSE_ALL,"ALL",manageX+(manageBtnW+manageGap)*3,manageY,manageBtnW,26,C'55,16,95',clrWhite,7);
+   Btn(B_FIRST_BE,"1BE",manageX+(manageBtnW+manageGap)*2,manageY,manageBtnW,26,C'0,92,125',clrWhite,7);
+   Btn(B_CLOSE50,"50%",manageX+(manageBtnW+manageGap)*3,manageY,manageBtnW,26,C'90,65,0',clrWhite,7);
+   Btn(B_CLOSE_ALL,"ALL",manageX+(manageBtnW+manageGap)*4,manageY,manageBtnW,26,C'55,16,95',clrWhite,7);
 
    g_PanelBuilt=true;
 }
@@ -3584,6 +3608,7 @@ void UpdatePanel()
    SetBtn(B_MODE_ADV,g_AdvancedMode ? C'0,95,170' : C'24,34,48',clrWhite);
    SetBtn(B_CLOSE,hasPos ? C'110,18,24' : C'36,42,54',clrWhite);
    SetBtn(B_BE,hasPos ? C'0,88,145' : C'36,42,54',clrWhite);
+   SetBtn(B_FIRST_BE,hasPos ? C'0,105,140' : C'36,42,54',clrWhite);
    SetBtn(B_CLOSE50,hasPos ? C'120,84,0' : C'36,42,54',clrWhite);
    SetBtn(B_CLOSE_ALL,hasPos ? C'74,26,126' : C'36,42,54',clrWhite);
 
@@ -4347,6 +4372,11 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       MoveToBreakEven();
       msg="WEB break even processed";
    }
+   else if(action=="FIRST_BREAK_EVEN" || action=="FIRST_BE" || action=="BE_FIRST")
+   {
+      MoveFirstTradeToBreakEven();
+      msg=g_LastMessage;
+   }
    else if(action=="TOGGLE_PARTIALS")
    {
       g_PC_On=!g_PC_On;
@@ -4409,6 +4439,14 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       g_PC1_Pct=ClampPercent(TCX_JsonNumber(raw,"pc1",g_PC1_Pct));
       g_PC2_Pct=ClampPercent(TCX_JsonNumber(raw,"pc2",g_PC2_Pct));
       g_PC3_Pct=ClampPercent(TCX_JsonNumber(raw,"pc3",g_PC3_Pct));
+      bool explicitPartials=TCX_JsonHasKey(raw,"partialsOn");
+      bool explicitSecond=TCX_JsonHasKey(raw,"secondEntryOn");
+      bool explicitFirstTrail=TCX_JsonHasKey(raw,"firstTrailOn");
+      bool firstBeRequested=TCX_JsonBool(raw,"firstBreakEven",false);
+
+      if(explicitPartials)
+         g_PC_On=TCX_JsonBool(raw,"partialsOn",g_PC_On);
+
       if(TCX_JsonHasKey(raw,"secondEntryOn"))
       {
          g_SecondEntryOn=TCX_JsonBool(raw,"secondEntryOn",g_SecondEntryOn);
@@ -4419,11 +4457,27 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
          }
          SyncSecondEntryState();
       }
+
+      if(explicitFirstTrail)
+      {
+         g_FirstTrailOn=TCX_JsonBool(raw,"firstTrailOn",g_FirstTrailOn);
+         SyncFirstTrailState();
+      }
+
       SetEditText(E_PC1,g_PC1_Pct,0);
       SetEditText(E_PC2,g_PC2_Pct,0);
       SetEditText(E_PC3,g_PC3_Pct,0);
-      msg=TCX_JsonHasKey(raw,"secondEntryOn") ? "WEB partials and second entry updated" : "WEB partial values updated";
-      SetLastMessage(msg,clrSilver);
+
+      if(firstBeRequested)
+      {
+         MoveFirstTradeToBreakEven();
+         msg=g_LastMessage;
+      }
+      else
+      {
+         msg=(explicitPartials || explicitSecond || explicitFirstTrail) ? "WEB trade controls updated" : "WEB partial values updated";
+         SetLastMessage(msg,clrSilver);
+      }
    }
    else if(action=="PING" || action=="NOOP")
    {
@@ -4790,6 +4844,13 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
    if(sparam==B_BE)
    {
       MoveToBreakEven();
+      UpdatePanel();
+      return;
+   }
+
+   if(sparam==B_FIRST_BE)
+   {
+      MoveFirstTradeToBreakEven();
       UpdatePanel();
       return;
    }
