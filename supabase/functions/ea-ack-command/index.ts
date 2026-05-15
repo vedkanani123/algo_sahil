@@ -37,11 +37,11 @@ Deno.serve(async (req) => {
       .select('id,user_id,ea_id,action,payload,status,result_message')
       .single()
     if (error) throw error
-    try {
-      await notifyCommandAck(admin, command, String(message).slice(0, 500))
-    } catch (notifyErr) {
+
+    const notifyTask = notifyCommandAck(admin, command, String(message).slice(0, 500)).catch((notifyErr) => {
       console.error('telegram command ack notification failed', notifyErr)
-    }
+    })
+    ;(globalThis as any).EdgeRuntime?.waitUntil?.(notifyTask)
     return json({ ok:true })
   } catch (e) {
     return json({ ok:false, error:String((e as Error)?.message || e) }, 401)

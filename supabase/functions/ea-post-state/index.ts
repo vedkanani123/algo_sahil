@@ -35,7 +35,8 @@ Deno.serve(async (req) => {
     await admin.from('ea_instances').update({ last_seen_at: now, symbol: state.symbol || undefined, account_login: state.accountLogin || undefined }).eq('id', ea.id)
     const { error } = await admin.from('ea_states').upsert({ ea_id: ea.id, user_id: ea.user_id, state, updated_at: now }, { onConflict: 'ea_id' })
     if (error) throw error
-    try {
+
+    const notifyTask = (async () => {
       const { data: status } = await admin.from('telegram_ea_status').select('is_online').eq('ea_id', ea.id).maybeSingle()
       if (!status?.is_online) await notifyEaOnline(admin, ea, state, now)
       else {
@@ -48,9 +49,10 @@ Deno.serve(async (req) => {
         }, { onConflict: 'ea_id' })
       }
       await notifyStateChanges(admin, ea, previousRow?.state || null, state, now)
-    } catch (notifyErr) {
+    })().catch((notifyErr) => {
       console.error('telegram state notification failed', notifyErr)
-    }
+    })
+    ;(globalThis as any).EdgeRuntime?.waitUntil?.(notifyTask)
     return json({ ok:true })
   } catch (e) {
     return json({ ok:false, error:String((e as Error)?.message || e) }, 401)

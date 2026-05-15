@@ -21,6 +21,7 @@ const EVENT_LABELS: Record<string, string> = {
   CANCEL: 'CANCEL',
   CLOSE_50: 'CLOSE 50%',
   BREAK_EVEN: 'BREAK EVEN',
+  FIRST_BE_EXIT: 'FIRST BE EXIT',
   FIRST_BREAK_EVEN: 'FIRST BREAK EVEN',
   CLOSE_ALL: 'CLOSE ALL',
   TOGGLE_PARTIALS: 'TOGGLE PARTIALS',
@@ -164,6 +165,7 @@ function commandIntent(action: string, payload: Record<string, unknown> = {}) {
   if (action === 'CANCEL') return ['⏸ Cancel Action Sent', 'Cancel waiting mode request sent to EA.']
   if (action === 'CLOSE_50') return ['💰 Close 50% Action Sent', 'Close 50% request sent to EA.']
   if (action === 'BREAK_EVEN') return ['🛡 Break Even Action Sent', 'Break even request sent to EA.']
+  if (action === 'FIRST_BE_EXIT') return ['🛡 First BE Exit Sent', 'First trade break-even exit request sent to EA.']
   if (action === 'FIRST_BREAK_EVEN') return ['🛡 First BE Action Sent', 'First trade break even request sent to EA.']
   if (action === 'CLOSE_ALL') return ['🛑 Close All Action Sent', 'Close all matching EA positions request sent to EA.']
   if (action === 'TOGGLE_PARTIALS') return ['⚙️ Partials Toggle Sent', 'Partial close toggle request sent to EA.']
@@ -171,6 +173,7 @@ function commandIntent(action: string, payload: Record<string, unknown> = {}) {
   if (action === 'TOGGLE_FIRST_TRAIL') return ['⚙️ First Trail Toggle Sent', 'First trade M5 trailing toggle request sent to EA.']
   if (action === 'SET_MODE') return ['⚙️ Mode Update Sent', `Mode update sent to EA: ${String(payload.mode || '--')}.`]
   if (action === 'SET_RISK') return ['⚙️ Risk Update Sent', `Risk settings sent to EA. Lot: ${payload.lot ?? '--'}, Risk: ${payload.risk ?? '--'}, RR: 1:${payload.rr ?? '--'}.`]
+  if (action === 'SET_PARTIALS' && payload.firstBeExit) return ['🛡 First BE Exit Sent', 'First trade break-even exit request sent to EA.']
   if (action === 'SET_PARTIALS' && payload.firstBreakEven) return ['🛡 First BE Action Sent', 'First trade break even request sent to EA.']
   if (action === 'SET_PARTIALS' && ('partialsOn' in payload || 'secondEntryOn' in payload || 'firstTrailOn' in payload)) return ['⚙️ Trade Controls Sent', 'Trade control settings sent to EA.']
   if (action === 'SET_PARTIALS') return ['⚙️ Partial Values Sent', `Partial values sent to EA. PC1: ${payload.pc1 ?? '--'}%, PC2: ${payload.pc2 ?? '--'}%, PC3: ${payload.pc3 ?? '--'}%.`]

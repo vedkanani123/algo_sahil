@@ -107,7 +107,7 @@ InpSupabaseFunctionsUrl = https://YOUR_PROJECT_REF.functions.supabase.co
 InpSupabaseEaId         = copied EA ID
 InpSupabaseEaToken      = copied EA token
 InpRiskMoney            = account-currency risk per trade, for example 100
-InpWebPollMilliseconds  = 700
+InpWebPollMilliseconds  = 200
 ```
 
 Risk is now money, not percent. If the account currency is USD and the web dashboard risk field is `100`, the EA sizes the trade so the stop-loss risk is about USD 100 before broker lot-step rounding and margin limits.

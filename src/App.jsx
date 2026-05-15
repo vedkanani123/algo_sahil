@@ -54,6 +54,8 @@ const ACTIONS = {
   CANCEL: 'CANCEL',
   CLOSE_50: 'CLOSE_50',
   BREAK_EVEN: 'BREAK_EVEN',
+  FIRST_BE_EXIT: 'FIRST_BE_EXIT',
+  FIRST_BREAK_EVEN: 'FIRST_BREAK_EVEN',
   CLOSE_ALL: 'CLOSE_ALL',
   TOGGLE_PARTIALS: 'TOGGLE_PARTIALS',
   TOGGLE_SECOND_ENTRY: 'TOGGLE_SECOND_ENTRY',
@@ -81,6 +83,9 @@ const TELEGRAM_PREFS = [
 ]
 
 const DEFAULT_TELEGRAM_PREFS = TELEGRAM_PREFS.reduce((acc, [key]) => ({ ...acc, [key]: true }), {})
+const LIVE_POLL_MS = 500
+const CONTROL_OPTIMISTIC_MS = 12000
+const CONTROL_KEYS = ['partialsOn', 'secondEntryOn', 'firstTrailOn']
 
 const RULE_COMPANIES = [
   { id: 'fundingpips', label: 'FundingPips', hasRules: true },
@@ -867,9 +872,9 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
           <button className={view === 'rules' ? 'active' : ''} onClick={() => setView('rules')} title="Funding rules"><ListChecks size={16} /> Rules</button>
           <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')} title="Settings"><Settings2 size={16} /> Settings</button>
         </div>
-        <div className="syncBadge" title="Dashboard polls live data every 1 second">
+        <div className="syncBadge" title="Dashboard polls live data every 0.5 seconds and also listens for realtime updates">
           <span className="liveDot" />
-          <span>1s live</span>
+          <span>live sync</span>
           <small>{formatClock(lastSyncAt)}</small>
         </div>
         <button className="ghostBtn iconTextBtn" onClick={refresh} title="Refresh now">
@@ -969,6 +974,25 @@ function StepperInput({ label, value, onChange, onStep, stepLabel }) {
   )
 }
 
+function optimisticControlValue(optimisticControls, key, liveValue) {
+  const optimistic = optimisticControls[key]
+  if (optimistic && Date.now() - optimistic.at < CONTROL_OPTIMISTIC_MS) return optimistic.value
+  return Boolean(liveValue)
+}
+
+function pruneOptimisticControls(prev, liveState, now = Date.now()) {
+  const next = {}
+  for (const key of CONTROL_KEYS) {
+    const optimistic = prev[key]
+    if (!optimistic) continue
+    const liveValue = Boolean(liveState?.[key])
+    if (liveValue === optimistic.value) continue
+    if (now - optimistic.at >= CONTROL_OPTIMISTIC_MS) continue
+    next[key] = optimistic
+  }
+  return next
+}
+
 function CommandPanel({ session, selected, state, reloadCommands }) {
   const s = state?.state || {}
   const [busy, setBusy] = useState('')
@@ -981,10 +1005,12 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
   const [optimisticControls, setOptimisticControls] = useState({})
   const currency = s.currency || 'Money'
   const controlState = {
-    partialsOn: optimisticControls.partialsOn ?? Boolean(s.partialsOn),
-    secondEntryOn: optimisticControls.secondEntryOn ?? Boolean(s.secondEntryOn),
-    firstTrailOn: optimisticControls.firstTrailOn ?? Boolean(s.firstTrailOn)
+    partialsOn: optimisticControlValue(optimisticControls, 'partialsOn', s.partialsOn),
+    secondEntryOn: optimisticControlValue(optimisticControls, 'secondEntryOn', s.secondEntryOn),
+    firstTrailOn: optimisticControlValue(optimisticControls, 'firstTrailOn', s.firstTrailOn)
   }
+  const controlStateRef = useRef(controlState)
+  controlStateRef.current = controlState
 
   useEffect(() => {
     if (!s) return
@@ -1003,17 +1029,15 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
       setPc(p => ({ pc1: String(s.pc1 ?? p.pc1), pc2: String(s.pc2 ?? p.pc2), pc3: String(s.pc3 ?? p.pc3) }))
     }
     setOptimisticControls(prev => {
-      const next = { ...prev }
-      if (next.partialsOn !== undefined && Boolean(s.partialsOn) === next.partialsOn) delete next.partialsOn
-      if (next.secondEntryOn !== undefined && Boolean(s.secondEntryOn) === next.secondEntryOn) delete next.secondEntryOn
-      if (next.firstTrailOn !== undefined && Boolean(s.firstTrailOn) === next.firstTrailOn) delete next.firstTrailOn
+      const next = pruneOptimisticControls(prev, s)
       return Object.keys(next).length === Object.keys(prev).length ? prev : next
     })
   }, [state?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, s.partialsOn, s.secondEntryOn, s.firstTrailOn, riskDirty, pcDirty, pendingRisk, pendingPc])
 
   async function cmd(action, payload = {}, options = {}) {
     if (!selected?.id) return alert('Create/select EA first')
-    setBusy(action)
+    const lock = options.lock !== false
+    if (lock) setBusy(action)
     try {
       const res = await fetch(`${functionsUrl}/create-command`, {
         method: 'POST',
@@ -1026,9 +1050,9 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
         return false
       }
       reloadCommands?.()
-      return true
+      return json.command || true
     } finally {
-      setBusy('')
+      if (lock) setBusy('')
     }
   }
 
@@ -1072,33 +1096,26 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
       pc1: clampNumber(pc.pc1, 0, 100),
       pc2: clampNumber(pc.pc2, 0, 100),
       pc3: clampNumber(pc.pc3, 0, 100),
-      partialsOn: controlState.partialsOn,
-      secondEntryOn: controlState.secondEntryOn,
-      firstTrailOn: controlState.firstTrailOn
+      partialsOn: controlState.partialsOn
     }
     const ok = await cmd(ACTIONS.SET_PARTIALS, next)
     if (ok) setPendingPc(next)
   }
 
-  async function sendControlSettings(nextControls = {}, extraPayload = {}) {
-    const payload = {
-      pc1: clampNumber(pc.pc1, 0, 100),
-      pc2: clampNumber(pc.pc2, 0, 100),
-      pc3: clampNumber(pc.pc3, 0, 100),
-      partialsOn: controlState.partialsOn,
-      secondEntryOn: controlState.secondEntryOn,
-      firstTrailOn: controlState.firstTrailOn,
-      ...nextControls,
-      ...extraPayload
-    }
-    if (Object.keys(nextControls).length) {
-      setOptimisticControls(prev => ({ ...prev, ...nextControls }))
-    }
-    const ok = await cmd(ACTIONS.SET_PARTIALS, payload)
-    if (!ok && Object.keys(nextControls).length) {
+  async function setBooleanControl(key, value) {
+    const requestId = uid()
+    const now = Date.now()
+    controlStateRef.current = { ...controlStateRef.current, [key]: value }
+    setOptimisticControls(prev => ({
+      ...pruneOptimisticControls(prev, s, now),
+      [key]: { value, at: now, requestId }
+    }))
+    const ok = await cmd(ACTIONS.SET_PARTIALS, { [key]: value, request_id: requestId }, { lock: false })
+    if (!ok) {
       setOptimisticControls(prev => {
+        if (prev[key]?.requestId !== requestId) return prev
         const copy = { ...prev }
-        Object.keys(nextControls).forEach(key => delete copy[key])
+        delete copy[key]
         return copy
       })
     }
@@ -1106,19 +1123,23 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
   }
 
   function togglePartials() {
-    return sendControlSettings({ partialsOn: !controlState.partialsOn })
+    return setBooleanControl('partialsOn', !controlStateRef.current.partialsOn)
   }
 
   function toggleSecondEntry() {
-    return sendControlSettings({ secondEntryOn: !controlState.secondEntryOn })
+    return setBooleanControl('secondEntryOn', !controlStateRef.current.secondEntryOn)
   }
 
   function toggleFirstTrail() {
-    return sendControlSettings({ firstTrailOn: !controlState.firstTrailOn })
+    return setBooleanControl('firstTrailOn', !controlStateRef.current.firstTrailOn)
   }
 
   function firstBreakEven() {
-    return sendControlSettings({}, { firstBreakEven: true })
+    return cmd(ACTIONS.SET_PARTIALS, { firstBreakEven: true }, { lock: false })
+  }
+
+  function firstBreakEvenExit() {
+    return cmd(ACTIONS.SET_PARTIALS, { firstBeExit: true })
   }
 
   return (
@@ -1133,21 +1154,22 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
         </div>
 
         <div className="bigBtns">
-          <button className="buyBtn" disabled={Boolean(busy)} onClick={() => cmd(ACTIONS.ARM_BUY)}><ArrowUpCircle /> ARM BUY</button>
-          <button className="sellBtn" disabled={Boolean(busy)} onClick={() => cmd(ACTIONS.ARM_SELL)}><ArrowDownCircle /> ARM SELL</button>
+          <button className="buyBtn" disabled={busy === ACTIONS.ARM_BUY} onClick={() => cmd(ACTIONS.ARM_BUY)}><ArrowUpCircle /> ARM BUY</button>
+          <button className="sellBtn" disabled={busy === ACTIONS.ARM_SELL} onClick={() => cmd(ACTIONS.ARM_SELL)}><ArrowDownCircle /> ARM SELL</button>
         </div>
 
         <div className="miniBtns">
-          <button onClick={() => cmd(ACTIONS.AUTO_ARM)} disabled={Boolean(busy)}><CircleDot /> AUTO ARM</button>
-          <button onClick={() => cmd(ACTIONS.CANCEL)} disabled={Boolean(busy)}><PauseCircle /> CANCEL</button>
-          <button onClick={() => cmd(ACTIONS.PING)} disabled={Boolean(busy)}><Wifi /> PING</button>
+          <button onClick={() => cmd(ACTIONS.AUTO_ARM)} disabled={busy === ACTIONS.AUTO_ARM}><CircleDot /> AUTO ARM</button>
+          <button onClick={() => cmd(ACTIONS.CANCEL)} disabled={busy === ACTIONS.CANCEL}><PauseCircle /> CANCEL</button>
+          <button onClick={() => cmd(ACTIONS.PING)} disabled={busy === ACTIONS.PING}><Wifi /> PING</button>
         </div>
 
         <div className="dangerZone">
-          <button onClick={() => cmd(ACTIONS.CLOSE_50)} disabled={Boolean(busy)}><SlidersHorizontal /> CLOSE 50%</button>
-          <button onClick={() => cmd(ACTIONS.BREAK_EVEN)} disabled={Boolean(busy)}><Shield /> BREAK EVEN</button>
-          <button onClick={firstBreakEven} disabled={Boolean(busy)}><Shield /> 1ST BE</button>
-          <button className="redBtn" onClick={() => window.confirm('Close all EA positions?') && cmd(ACTIONS.CLOSE_ALL)} disabled={Boolean(busy)}><XCircle /> CLOSE ALL</button>
+          <button onClick={() => cmd(ACTIONS.CLOSE_50)} disabled={busy === ACTIONS.CLOSE_50}><SlidersHorizontal /> CLOSE 50%</button>
+          <button onClick={() => cmd(ACTIONS.BREAK_EVEN)} disabled={busy === ACTIONS.BREAK_EVEN}><Shield /> BREAK EVEN</button>
+          <button onClick={firstBreakEven}><Shield /> 1ST BE</button>
+          <button onClick={firstBreakEvenExit} disabled={busy === ACTIONS.SET_PARTIALS}><Shield /> 1ST BE EXIT</button>
+          <button className="redBtn" onClick={() => window.confirm('Close all EA positions?') && cmd(ACTIONS.CLOSE_ALL)} disabled={busy === ACTIONS.CLOSE_ALL}><XCircle /> CLOSE ALL</button>
         </div>
       </div>
 
@@ -1166,16 +1188,16 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
           <StepperInput label="RR" value={risk.rr} onChange={value => updateRiskField('rr', value)} onStep={direction => stepRiskField('rr', direction)} stepLabel="+/- 0.1" />
         </div>
 
-        <button className="primaryBtn fullBtn" onClick={sendRiskSettings} disabled={Boolean(busy)}>
+        <button className="primaryBtn fullBtn" onClick={sendRiskSettings} disabled={busy === ACTIONS.SET_RISK}>
           Send Risk Settings
         </button>
 
         <div className="modeToggle" role="group" aria-label="EA mode controls">
-          <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'safe' })} className={!s.advanced ? 'active' : ''} disabled={Boolean(busy)}>Safe</button>
-          <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'advanced' })} className={s.advanced ? 'active' : ''} disabled={Boolean(busy)}>Advanced</button>
-          <button onClick={togglePartials} className={controlState.partialsOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>Partials {controlState.partialsOn ? 'ON' : 'OFF'}</button>
-          <button onClick={toggleSecondEntry} className={controlState.secondEntryOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>2nd {controlState.secondEntryOn ? 'ON' : 'OFF'}</button>
-          <button onClick={toggleFirstTrail} className={controlState.firstTrailOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>1st Trail {controlState.firstTrailOn ? 'ON' : 'OFF'}</button>
+          <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'safe' })} className={!s.advanced ? 'active' : ''} disabled={busy === ACTIONS.SET_MODE}>Safe</button>
+          <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'advanced' })} className={s.advanced ? 'active' : ''} disabled={busy === ACTIONS.SET_MODE}>Advanced</button>
+          <button onClick={togglePartials} className={controlState.partialsOn ? 'active successToggle' : ''}>Partials {controlState.partialsOn ? 'ON' : 'OFF'}</button>
+          <button onClick={toggleSecondEntry} className={controlState.secondEntryOn ? 'active successToggle' : ''}>2nd {controlState.secondEntryOn ? 'ON' : 'OFF'}</button>
+          <button onClick={toggleFirstTrail} className={controlState.firstTrailOn ? 'active successToggle' : ''}>1st Trail {controlState.firstTrailOn ? 'ON' : 'OFF'}</button>
         </div>
 
         <div className="inlineStatus">{s.secondEntryStatus || '2nd entry OFF'}</div>
@@ -1187,7 +1209,7 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
           <StepperInput label="PC3 %" value={pc.pc3} onChange={value => updatePcField('pc3', value)} onStep={direction => stepPcField('pc3', direction)} stepLabel="+/- 1" />
         </div>
 
-        <button className="ghostBtn fullBtn" onClick={sendPartialSettings} disabled={Boolean(busy)}>
+        <button className="ghostBtn fullBtn" onClick={sendPartialSettings} disabled={busy === ACTIONS.SET_PARTIALS}>
           Send Partial Settings
         </button>
       </div>
@@ -2220,7 +2242,7 @@ function Dashboard({ session }) {
     pollLiveData()
     const interval = window.setInterval(() => {
       if (!cancelled) pollLiveData()
-    }, 1000)
+    }, LIVE_POLL_MS)
 
     return () => {
       cancelled = true

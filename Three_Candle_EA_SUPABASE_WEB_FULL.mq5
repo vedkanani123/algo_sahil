@@ -3,7 +3,7 @@
 //| Indicator-matched model detection with armed BUY/SELL execution   |
 //+------------------------------------------------------------------+
 #property copyright "Three Candle Execution Controller"
-#property version   "1.294"
+#property version   "1.298"
 #property description "Attach to a chart as an Expert Advisor. BUY/SELL buttons arm the next matching 3-candle model."
 #property strict
 
@@ -78,6 +78,7 @@ input double            InpPC3_Percent          = 40.0;
 
 input group "BREAK EVEN"
 input int               InpBreakEvenPlusPoints  = 1;
+input double            InpBreakEvenExitExtraMoney = 0.0;
 
 input group "PANEL"
 input int               InpPanelX               = 10;
@@ -91,8 +92,8 @@ input bool              InpWebControlEnabled       = true;
 input string            InpSupabaseFunctionsUrl    = "https://YOUR_PROJECT_REF.functions.supabase.co";
 input string            InpSupabaseEaId            = "PASTE_EA_ID_FROM_WEBSITE";
 input string            InpSupabaseEaToken         = "PASTE_EA_SECRET_TOKEN_FROM_WEBSITE";
-input int               InpWebPollMilliseconds     = 700;
-input int               InpWebTimeoutMs            = 3000;
+input int               InpWebPollMilliseconds     = 200;
+input int               InpWebTimeoutMs            = 1500;
 input bool              InpWebPostLiveState        = true;
 input bool              InpWebAllowCloseCommands   = true;
 
@@ -126,6 +127,7 @@ string UI = "TCX_UI_";
 #define B_SECOND    "TCX_UI_B_SECOND"
 #define B_FIRST_TRAIL "TCX_UI_B_FIRST_TRAIL"
 #define B_FIRST_BE  "TCX_UI_B_FIRST_BE"
+#define B_FIRST_BE_EXIT "TCX_UI_B_FIRST_BE_EXIT"
 
 #define E_LOT       "TCX_UI_E_LOT"
 #define E_RISK      "TCX_UI_E_RISK"
@@ -193,9 +195,11 @@ datetime g_WebLastPollSecond = 0;
 datetime g_WebLastPostSecond = 0;
 uint     g_WebLastPollTick   = 0;
 uint     g_WebLastPostTick   = 0;
+uint     g_WebBackoffUntilTick = 0;
 bool     g_WebConnected      = false;
 string   g_WebLastError      = "";
 string   g_WebLastCommandId  = "";
+bool     g_WebStateDirty     = false;
 
 //====================================================================
 // STRUCTS
@@ -234,6 +238,7 @@ void SetLastMessage(string text,color clr)
 {
    g_LastMessage=text;
    g_LastMsgColor=clr;
+   g_WebStateDirty=true;
    LogMsg("STATUS",text);
 }
 
@@ -2427,6 +2432,108 @@ void MonitorPartialClose()
    }
 }
 
+double EntryCommissionForPosition(long positionId)
+{
+   if(positionId<=0)
+      return 0.0;
+   if(!HistorySelect((datetime)0,TimeCurrent()))
+      return 0.0;
+
+   double commission=0.0;
+   int total=HistoryDealsTotal();
+   for(int i=0;i<total;i++)
+   {
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0)
+         continue;
+      if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)
+         continue;
+      if((long)HistoryDealGetInteger(deal,DEAL_POSITION_ID)!=positionId)
+         continue;
+
+      long entry=HistoryDealGetInteger(deal,DEAL_ENTRY);
+      if(entry==DEAL_ENTRY_IN || entry==DEAL_ENTRY_INOUT)
+         commission+=HistoryDealGetDouble(deal,DEAL_COMMISSION);
+   }
+
+   return commission;
+}
+
+double EstimatedCloseCommissionFromEntry(double entryCommission)
+{
+   if(entryCommission<0.0)
+      return -MathAbs(entryCommission);
+   return 0.0;
+}
+
+double BreakEvenCostTargetMoney()
+{
+   long positionId=(long)PositionGetInteger(POSITION_IDENTIFIER);
+   double entryCommission=EntryCommissionForPosition(positionId);
+   double estimatedCloseCommission=EstimatedCloseCommissionFromEntry(entryCommission);
+   double swap=PositionGetDouble(POSITION_SWAP);
+   double extra=MathMax(0.0,InpBreakEvenExitExtraMoney);
+   double costs=swap+entryCommission+estimatedCloseCommission-extra;
+   return MathMax(0.0,-costs);
+}
+
+double CommissionAdjustedBreakEvenPrice(bool isBuy,double entry,double volume)
+{
+   double targetMoney=BreakEvenCostTargetMoney();
+   int plusPoints=InpBreakEvenPlusPoints;
+   if(plusPoints<0)
+      plusPoints=0;
+   ENUM_ORDER_TYPE orderType=isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double onePointPrice=isBuy ? entry+_Point : entry-_Point;
+   double onePointProfit=0.0;
+
+   if(OrderCalcProfit(orderType,_Symbol,volume,entry,onePointPrice,onePointProfit) && onePointProfit>0.0)
+   {
+      int costPoints=(int)MathCeil(targetMoney/onePointProfit);
+      double price=isBuy ? entry+(costPoints+plusPoints)*_Point
+                         : entry-(costPoints+plusPoints)*_Point;
+      return NormalizeDouble(price,_Digits);
+   }
+
+   double fallback=isBuy ? entry+plusPoints*_Point : entry-plusPoints*_Point;
+   return NormalizeDouble(fallback,_Digits);
+}
+
+bool ExpectedCloseNetForTicket(ulong ticket,double &net,string &reason)
+{
+   net=0.0;
+   reason="";
+   if(ticket==0 || !PositionSelectByTicket(ticket))
+   {
+      reason="position not found";
+      return false;
+   }
+
+   bool isBuy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+   double entry=PositionGetDouble(POSITION_PRICE_OPEN);
+   double volume=PositionGetDouble(POSITION_VOLUME);
+   double closePrice=isBuy ? SymbolInfoDouble(_Symbol,SYMBOL_BID) : SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   if(entry<=0.0 || volume<=0.0 || closePrice<=0.0)
+   {
+      reason="price not ready";
+      return false;
+   }
+
+   ENUM_ORDER_TYPE orderType=isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double gross=0.0;
+   if(!OrderCalcProfit(orderType,_Symbol,volume,entry,closePrice,gross))
+      gross=PositionGetDouble(POSITION_PROFIT);
+
+   long positionId=(long)PositionGetInteger(POSITION_IDENTIFIER);
+   double entryCommission=EntryCommissionForPosition(positionId);
+   double estimatedCloseCommission=EstimatedCloseCommissionFromEntry(entryCommission);
+   double swap=PositionGetDouble(POSITION_SWAP);
+   double extra=MathMax(0.0,InpBreakEvenExitExtraMoney);
+
+   net=gross+swap+entryCommission+estimatedCloseCommission-extra;
+   return true;
+}
+
 bool MoveTicketToBreakEven(ulong ticket,string &reason)
 {
    reason="";
@@ -2438,10 +2545,10 @@ bool MoveTicketToBreakEven(ulong ticket,string &reason)
 
    bool isBuy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
    double entry=PositionGetDouble(POSITION_PRICE_OPEN);
+   double volume=PositionGetDouble(POSITION_VOLUME);
    double oldSL=PositionGetDouble(POSITION_SL);
    double tp=PositionGetDouble(POSITION_TP);
-   double newSL=isBuy ? entry+InpBreakEvenPlusPoints*_Point
-                      : entry-InpBreakEvenPlusPoints*_Point;
+   double newSL=CommissionAdjustedBreakEvenPrice(isBuy,entry,volume);
 
    newSL=NormalizeDouble(newSL,_Digits);
 
@@ -2540,6 +2647,48 @@ void MoveFirstTradeToBreakEven()
    }
 
    SetLastMessage("First BE failed: "+reason,clrTomato);
+}
+
+void CloseFirstTradeAtBreakEvenExit()
+{
+   if(CountOurPositions()<2)
+   {
+      SetLastMessage("1st BE exit waits until the second trade is open",clrGold);
+      return;
+   }
+
+   if(!SelectFirstEntryPosition())
+   {
+      SetLastMessage("No first trade for BE exit",clrGold);
+      return;
+   }
+
+   ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+   double expectedNet=0.0;
+   string reason="";
+   if(!ExpectedCloseNetForTicket(ticket,expectedNet,reason))
+   {
+      SetLastMessage("1st BE exit failed: "+reason,clrTomato);
+      return;
+   }
+
+   if(expectedNet<-0.01)
+   {
+      SetLastMessage("1st BE exit blocked - net would be "+SignedMoneyText(expectedNet)+" after spread/commission",clrGold);
+      return;
+   }
+
+   if(Trade.PositionClose(ticket) && TradeRetcodeOK())
+   {
+      if(ticket==g_StateTicket)
+         ResetLocalTradeState();
+      if(ticket==g_FirstTrailTicket)
+         ResetFirstTrailState();
+      SetLastMessage("First trade BE exit closed | est net "+SignedMoneyText(expectedNet),clrLime);
+      return;
+   }
+
+   SetLastMessage("1st BE exit failed: "+Trade.ResultRetcodeDescription(),clrTomato);
 }
 
 void CloseAllPositions()
@@ -3505,15 +3654,16 @@ void BuildPanel()
    Txt(UI+"MSGT","MESSAGE",x+pad+16,cy+9,soft,7,true,25);
    Txt(UI+"MSG","Ready",x+pad+16,cy+28,C'150,165,195',7,true,25);
 
-   int manageBtnW=54;
+   int manageBtnW=50;
    int manageGap=6;
-   int manageX=x+pad+inner-(manageBtnW*5+manageGap*4)-12;
+   int manageX=x+pad+inner-(manageBtnW*6+manageGap*5)-12;
    int manageY=cy+14;
    Btn(B_CLOSE,"CLOSE",manageX,manageY,manageBtnW,26,C'80,12,18',clrWhite,7);
    Btn(B_BE,"BE",manageX+manageBtnW+manageGap,manageY,manageBtnW,26,C'0,70,115',clrWhite,7);
    Btn(B_FIRST_BE,"1BE",manageX+(manageBtnW+manageGap)*2,manageY,manageBtnW,26,C'0,92,125',clrWhite,7);
-   Btn(B_CLOSE50,"50%",manageX+(manageBtnW+manageGap)*3,manageY,manageBtnW,26,C'90,65,0',clrWhite,7);
-   Btn(B_CLOSE_ALL,"ALL",manageX+(manageBtnW+manageGap)*4,manageY,manageBtnW,26,C'55,16,95',clrWhite,7);
+   Btn(B_FIRST_BE_EXIT,"1BEX",manageX+(manageBtnW+manageGap)*3,manageY,manageBtnW,26,C'0,118,96',clrWhite,7);
+   Btn(B_CLOSE50,"50%",manageX+(manageBtnW+manageGap)*4,manageY,manageBtnW,26,C'90,65,0',clrWhite,7);
+   Btn(B_CLOSE_ALL,"ALL",manageX+(manageBtnW+manageGap)*5,manageY,manageBtnW,26,C'55,16,95',clrWhite,7);
 
    g_PanelBuilt=true;
 }
@@ -3609,6 +3759,7 @@ void UpdatePanel()
    SetBtn(B_CLOSE,hasPos ? C'110,18,24' : C'36,42,54',clrWhite);
    SetBtn(B_BE,hasPos ? C'0,88,145' : C'36,42,54',clrWhite);
    SetBtn(B_FIRST_BE,hasPos ? C'0,105,140' : C'36,42,54',clrWhite);
+   SetBtn(B_FIRST_BE_EXIT,openCount>1 ? C'0,132,108' : C'36,42,54',clrWhite);
    SetBtn(B_CLOSE50,hasPos ? C'120,84,0' : C'36,42,54',clrWhite);
    SetBtn(B_CLOSE_ALL,hasPos ? C'74,26,126' : C'36,42,54',clrWhite);
 
@@ -3750,6 +3901,7 @@ void UpdatePanel()
 //====================================================================
 void RefreshLotEdit();
 void RefreshRiskEdit();
+void TCX_SupabasePostState(bool force);
 
 string TCX_TrimRightSlash(string url)
 {
@@ -4163,6 +4315,10 @@ bool TCX_HttpPostFunction(string functionName,string body,string &response)
 {
    response="";
    if(!InpWebControlEnabled) return false;
+   uint nowTick=GetTickCount();
+   if(g_WebBackoffUntilTick>0 && nowTick<g_WebBackoffUntilTick)
+      return false;
+
    string base=TCX_TrimRightSlash(InpSupabaseFunctionsUrl);
    string url=base+"/"+functionName;
    string headers="Content-Type: application/json\r\n";
@@ -4176,11 +4332,13 @@ bool TCX_HttpPostFunction(string functionName,string body,string &response)
    {
       g_WebLastError=functionName+" HTTP "+IntegerToString(code)+" MT5err "+IntegerToString(GetLastError());
       g_WebConnected=false;
+      g_WebBackoffUntilTick=GetTickCount()+500;
       return false;
    }
    response=CharArrayToString(result,0,-1,CP_UTF8);
    g_WebConnected=true;
    g_WebLastError="";
+   g_WebBackoffUntilTick=0;
    return true;
 }
 
@@ -4377,6 +4535,11 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       MoveFirstTradeToBreakEven();
       msg=g_LastMessage;
    }
+   else if(action=="FIRST_BE_EXIT" || action=="FIRST_BREAK_EVEN_EXIT" || action=="BE_EXIT_FIRST" || action=="FIRST_PROFIT_EXIT")
+   {
+      CloseFirstTradeAtBreakEvenExit();
+      msg=g_LastMessage;
+   }
    else if(action=="TOGGLE_PARTIALS")
    {
       g_PC_On=!g_PC_On;
@@ -4443,6 +4606,7 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       bool explicitSecond=TCX_JsonHasKey(raw,"secondEntryOn");
       bool explicitFirstTrail=TCX_JsonHasKey(raw,"firstTrailOn");
       bool firstBeRequested=TCX_JsonBool(raw,"firstBreakEven",false);
+      bool firstBeExitRequested=TCX_JsonBool(raw,"firstBeExit",false);
 
       if(explicitPartials)
          g_PC_On=TCX_JsonBool(raw,"partialsOn",g_PC_On);
@@ -4468,7 +4632,12 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       SetEditText(E_PC2,g_PC2_Pct,0);
       SetEditText(E_PC3,g_PC3_Pct,0);
 
-      if(firstBeRequested)
+      if(firstBeExitRequested)
+      {
+         CloseFirstTradeAtBreakEvenExit();
+         msg=g_LastMessage;
+      }
+      else if(firstBeRequested)
       {
          MoveFirstTradeToBreakEven();
          msg=g_LastMessage;
@@ -4492,6 +4661,7 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
 
    g_WebLastCommandId=id;
    UpdatePanel();
+   g_WebStateDirty=true;
    return true;
 }
 
@@ -4514,7 +4684,7 @@ void TCX_SupabasePollCommands()
       return;
 
    uint nowTick=GetTickCount();
-   int ms=MathMax(300,InpWebPollMilliseconds);
+   int ms=MathMax(200,InpWebPollMilliseconds);
    if(g_WebLastPollTick>0 && (uint)(nowTick-g_WebLastPollTick)<(uint)ms)
       return;
    g_WebLastPollTick=nowTick;
@@ -4537,19 +4707,21 @@ void TCX_SupabasePollCommands()
    TCX_AckCommand(id,ok ? "done" : "failed",g_LastMessage);
 }
 
-void TCX_SupabasePostState()
+void TCX_SupabasePostState(bool force)
 {
    if(!TCX_WebReady() || !InpWebPostLiveState)
       return;
 
    uint nowTick=GetTickCount();
-   if(g_WebLastPostTick>0 && (uint)(nowTick-g_WebLastPostTick)<1000)
+   int ms=1000;
+   if(!force && !g_WebStateDirty && g_WebLastPostTick>0 && (uint)(nowTick-g_WebLastPostTick)<(uint)ms)
       return;
    g_WebLastPostTick=nowTick;
 
    string res="";
    string body="{\"ea_id\":\""+TCX_JsonEscape(InpSupabaseEaId)+"\",\"ea_token\":\""+TCX_JsonEscape(InpSupabaseEaToken)+"\",\"state\":"+TCX_BuildStateJson()+"}";
-   TCX_HttpPostFunction("ea-post-state",body,res);
+   if(TCX_HttpPostFunction("ea-post-state",body,res))
+      g_WebStateDirty=false;
 }
 
 void EnsurePanel()
@@ -4592,7 +4764,7 @@ void RuntimeLoop(bool allowTradeScan)
       TryArmedExecution();
 
    UpdatePanel();
-   TCX_SupabasePostState();
+   TCX_SupabasePostState(false);
    ChartHeartbeat();
 }
 
@@ -4698,7 +4870,7 @@ int OnInit()
    SetLastMessage("Controller ready - buttons wait for next model, spread no block",clrSilver);
    UpdatePanel();
    if(InpWebControlEnabled)
-      EventSetMillisecondTimer(MathMax(300,InpWebPollMilliseconds));
+      EventSetMillisecondTimer(MathMax(200,InpWebPollMilliseconds));
    else
       EventSetTimer(1);
    ChartRedraw();
@@ -4851,6 +5023,13 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
    if(sparam==B_FIRST_BE)
    {
       MoveFirstTradeToBreakEven();
+      UpdatePanel();
+      return;
+   }
+
+   if(sparam==B_FIRST_BE_EXIT)
+   {
+      CloseFirstTradeAtBreakEvenExit();
       UpdatePanel();
       return;
    }
