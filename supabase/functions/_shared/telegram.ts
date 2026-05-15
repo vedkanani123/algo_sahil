@@ -24,6 +24,7 @@ const EVENT_LABELS: Record<string, string> = {
   CLOSE_ALL: 'CLOSE ALL',
   TOGGLE_PARTIALS: 'TOGGLE PARTIALS',
   TOGGLE_SECOND_ENTRY: 'TOGGLE SECOND ENTRY',
+  TOGGLE_FIRST_TRAIL: 'TOGGLE FIRST TRAIL',
   SET_MODE: 'SET MODE',
   SET_RISK: 'SET RISK',
   SET_PARTIALS: 'SET PARTIALS',
@@ -165,6 +166,7 @@ function commandIntent(action: string, payload: Record<string, unknown> = {}) {
   if (action === 'CLOSE_ALL') return ['🛑 Close All Action Sent', 'Close all matching EA positions request sent to EA.']
   if (action === 'TOGGLE_PARTIALS') return ['⚙️ Partials Toggle Sent', 'Partial close toggle request sent to EA.']
   if (action === 'TOGGLE_SECOND_ENTRY') return ['⚙️ Second Entry Toggle Sent', 'Second entry toggle request sent to EA.']
+  if (action === 'TOGGLE_FIRST_TRAIL') return ['⚙️ First Trail Toggle Sent', 'First trade M5 trailing toggle request sent to EA.']
   if (action === 'SET_MODE') return ['⚙️ Mode Update Sent', `Mode update sent to EA: ${String(payload.mode || '--')}.`]
   if (action === 'SET_RISK') return ['⚙️ Risk Update Sent', `Risk settings sent to EA. Lot: ${payload.lot ?? '--'}, Risk: ${payload.risk ?? '--'}, RR: 1:${payload.rr ?? '--'}.`]
   if (action === 'SET_PARTIALS') return ['⚙️ Partial Values Sent', `Partial values sent to EA. PC1: ${payload.pc1 ?? '--'}%, PC2: ${payload.pc2 ?? '--'}%, PC3: ${payload.pc3 ?? '--'}%.`]

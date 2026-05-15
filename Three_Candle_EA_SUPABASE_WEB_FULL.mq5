@@ -3,7 +3,7 @@
 //| Indicator-matched model detection with armed BUY/SELL execution   |
 //+------------------------------------------------------------------+
 #property copyright "Three Candle Execution Controller"
-#property version   "1.290"
+#property version   "1.293"
 #property description "Attach to a chart as an Expert Advisor. BUY/SELL buttons arm the next matching 3-candle model."
 #property strict
 
@@ -58,6 +58,9 @@ input group "SECOND ENTRY"
 input bool              InpSecondEntryEnabled   = false;
 input double            InpSecondEntryTriggerLossR = 0.5;
 input double            InpSecondEntryCancelAtR = 2.0;
+
+input group "FIRST TRADE TRAILING"
+input bool              InpFirstTrailEnabled    = false;
 
 input group "LOT PANEL"
 input double            InpLotButtonStep        = 0.01;
@@ -121,6 +124,7 @@ string UI = "TCX_UI_";
 #define B_MODE_SAFE "TCX_UI_B_MODE_SAFE"
 #define B_MODE_ADV  "TCX_UI_B_MODE_ADV"
 #define B_SECOND    "TCX_UI_B_SECOND"
+#define B_FIRST_TRAIL "TCX_UI_B_FIRST_TRAIL"
 
 #define E_LOT       "TCX_UI_E_LOT"
 #define E_RISK      "TCX_UI_E_RISK"
@@ -141,6 +145,7 @@ bool     g_PanelBuilt    = false;
 datetime g_InitTime      = 0;
 datetime g_ArmMinSignalTime = 0;
 datetime g_LastTradeSignalTime = 0;
+datetime g_LastTradeScanBarTime = 0;
 
 double   g_Lot           = 0.01;
 double   g_RRTarget      = 3.0;
@@ -149,6 +154,7 @@ bool     g_PC_On         = false;
 bool     g_AutoArm       = false;
 bool     g_AdvancedMode  = false;
 bool     g_SecondEntryOn = false;
+bool     g_FirstTrailOn  = false;
 double   g_PC1_Pct       = 30.0;
 double   g_PC2_Pct       = 30.0;
 double   g_PC3_Pct       = 40.0;
@@ -165,6 +171,10 @@ ulong    g_SecondBaseTicket = 0;
 bool     g_SecondEntryDone  = false;
 bool     g_SecondEntryBlocked = false;
 datetime g_SecondEntryLastAttempt = 0;
+
+ulong    g_FirstTrailTicket = 0;
+bool     g_FirstTrailActive = false;
+datetime g_FirstTrailLastM5BarTime = 0;
 
 string   g_LastMessage   = "Ready";
 color    g_LastMsgColor  = clrSilver;
@@ -626,19 +636,6 @@ bool CanStartModelEntry(string &reason)
 
    SyncSecondEntryState();
 
-   if(!g_SecondEntryOn)
-   {
-      reason="Second entry OFF - one entry mode";
-      return false;
-   }
-
-   int maxEntries=MaxEntriesPerCycle();
-   if(openCount>=maxEntries)
-   {
-      reason="Maximum "+IntegerToString(maxEntries)+" entries already open";
-      return false;
-   }
-
    if(g_SecondEntryDone)
    {
       reason="Second entry already used for this trade";
@@ -651,7 +648,11 @@ bool CanStartModelEntry(string &reason)
       return false;
    }
 
-   return true;
+   if(g_SecondEntryOn)
+      reason="Trade already running - 2nd entry only triggers at -"+DoubleToString(MathMax(0.1,InpSecondEntryTriggerLossR),1)+"R";
+   else
+      reason="Trade already running - one entry mode";
+   return false;
 }
 
 bool SelectOldestOurPosition()
@@ -718,6 +719,76 @@ bool SelectNewestOurPosition()
    return PositionSelectByTicket(selectedTicket);
 }
 
+bool IsSecondEntryPositionComment()
+{
+   string comment=PositionGetString(POSITION_COMMENT);
+   return (StringFind(comment,"TCX Second")>=0);
+}
+
+bool SelectFirstEntryPosition()
+{
+   bool found=false;
+   ulong selectedTicket=0;
+   datetime selectedTime=0;
+
+   for(int i=PositionsTotal()-1;i>=0;i--)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+
+      string sym=PositionGetString(POSITION_SYMBOL);
+      long magic=(long)PositionGetInteger(POSITION_MAGIC);
+      if(sym!=_Symbol || magic!=InpMagic)
+         continue;
+
+      if(IsSecondEntryPositionComment())
+         continue;
+
+      datetime openTime=(datetime)PositionGetInteger(POSITION_TIME);
+      if(!found || openTime<selectedTime || (openTime==selectedTime && ticket<selectedTicket))
+      {
+         found=true;
+         selectedTicket=ticket;
+         selectedTime=openTime;
+      }
+   }
+
+   if(!found || selectedTicket==0)
+      return false;
+
+   return PositionSelectByTicket(selectedTicket);
+}
+
+ulong FindNewestOurPositionTicket(ulong exceptTicket)
+{
+   bool found=false;
+   ulong selectedTicket=0;
+   datetime selectedTime=0;
+
+   for(int i=PositionsTotal()-1;i>=0;i--)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0 || (exceptTicket>0 && ticket==exceptTicket))
+         continue;
+
+      string sym=PositionGetString(POSITION_SYMBOL);
+      long magic=(long)PositionGetInteger(POSITION_MAGIC);
+      if(sym!=_Symbol || magic!=InpMagic)
+         continue;
+
+      datetime openTime=(datetime)PositionGetInteger(POSITION_TIME);
+      if(!found || openTime>selectedTime || (openTime==selectedTime && ticket>selectedTicket))
+      {
+         found=true;
+         selectedTicket=ticket;
+         selectedTime=openTime;
+      }
+   }
+
+   return found ? selectedTicket : 0;
+}
+
 bool HasOurPosition()
 {
    return SelectOurPosition();
@@ -772,6 +843,12 @@ string StateKey(ulong ticket,string field)
    return "TCX."+IntegerToString(login)+"."+_Symbol+"."+IntegerToString(InpMagic)+"."+IntegerToString((long)ticket)+"."+field;
 }
 
+string SecondEntryCycleKey(string field)
+{
+   long login=(long)AccountInfoInteger(ACCOUNT_LOGIN);
+   return "TCX."+IntegerToString(login)+"."+_Symbol+"."+IntegerToString(InpMagic)+".second_cycle."+field;
+}
+
 bool LoadStateValue(ulong ticket,string field,double &value)
 {
    string key=StateKey(ticket,field);
@@ -780,6 +857,22 @@ bool LoadStateValue(ulong ticket,string field,double &value)
 
    value=GlobalVariableGet(key);
    return true;
+}
+
+bool LoadSecondEntryCycleValue(string field,double &value)
+{
+   string key=SecondEntryCycleKey(field);
+   if(!GlobalVariableCheck(key))
+      return false;
+
+   value=GlobalVariableGet(key);
+   return true;
+}
+
+void ClearSecondEntryCycleState()
+{
+   GlobalVariableDel(SecondEntryCycleKey("second_entry_done"));
+   GlobalVariableDel(SecondEntryCycleKey("second_entry_blocked"));
 }
 
 void SavePositionState()
@@ -808,11 +901,14 @@ void ResetLocalTradeState()
 
 void SaveSecondEntryState()
 {
-   if(g_SecondBaseTicket==0)
-      return;
+   GlobalVariableSet(SecondEntryCycleKey("second_entry_done"),g_SecondEntryDone ? 1.0 : 0.0);
+   GlobalVariableSet(SecondEntryCycleKey("second_entry_blocked"),g_SecondEntryBlocked ? 1.0 : 0.0);
 
-   GlobalVariableSet(StateKey(g_SecondBaseTicket,"second_entry_done"),g_SecondEntryDone ? 1.0 : 0.0);
-   GlobalVariableSet(StateKey(g_SecondBaseTicket,"second_entry_blocked"),g_SecondEntryBlocked ? 1.0 : 0.0);
+   if(g_SecondBaseTicket>0)
+   {
+      GlobalVariableSet(StateKey(g_SecondBaseTicket,"second_entry_done"),g_SecondEntryDone ? 1.0 : 0.0);
+      GlobalVariableSet(StateKey(g_SecondBaseTicket,"second_entry_blocked"),g_SecondEntryBlocked ? 1.0 : 0.0);
+   }
 }
 
 void ResetSecondEntryState()
@@ -821,17 +917,68 @@ void ResetSecondEntryState()
    g_SecondEntryDone=false;
    g_SecondEntryBlocked=false;
    g_SecondEntryLastAttempt=0;
+   ClearSecondEntryCycleState();
+}
+
+void SaveFirstTrailState()
+{
+   if(g_FirstTrailTicket==0)
+      return;
+
+   GlobalVariableSet(StateKey(g_FirstTrailTicket,"first_trail_active"),g_FirstTrailActive ? 1.0 : 0.0);
+   GlobalVariableSet(StateKey(g_FirstTrailTicket,"first_trail_last_m5"),(double)g_FirstTrailLastM5BarTime);
+}
+
+void ResetFirstTrailState()
+{
+   g_FirstTrailTicket=0;
+   g_FirstTrailActive=false;
+   g_FirstTrailLastM5BarTime=0;
+}
+
+void SyncFirstTrailState()
+{
+   if(!SelectFirstEntryPosition())
+   {
+      ResetFirstTrailState();
+      return;
+   }
+
+   ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+   if(ticket!=g_FirstTrailTicket)
+   {
+      g_FirstTrailTicket=ticket;
+
+      double stored=0.0;
+      if(LoadStateValue(ticket,"first_trail_active",stored))
+         g_FirstTrailActive=(stored>=0.5);
+      else
+         g_FirstTrailActive=false;
+
+      if(LoadStateValue(ticket,"first_trail_last_m5",stored) && stored>0.0)
+         g_FirstTrailLastM5BarTime=(datetime)stored;
+      else
+         g_FirstTrailLastM5BarTime=0;
+
+      SaveFirstTrailState();
+   }
 }
 
 void SyncSecondEntryState()
 {
    if(!SelectOldestOurPosition())
    {
+      if(g_SecondBaseTicket>0 && g_SecondEntryOn)
+         g_SecondEntryOn=false;
       ResetSecondEntryState();
       return;
    }
 
    ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+   double cycleStored=0.0;
+   bool cycleDone=(LoadSecondEntryCycleValue("second_entry_done",cycleStored) && cycleStored>=0.5);
+   bool cycleBlocked=(LoadSecondEntryCycleValue("second_entry_blocked",cycleStored) && cycleStored>=0.5);
+
    if(ticket!=g_SecondBaseTicket)
    {
       g_SecondBaseTicket=ticket;
@@ -848,7 +995,25 @@ void SyncSecondEntryState()
       else
          g_SecondEntryBlocked=false;
 
+      if(cycleDone)
+         g_SecondEntryDone=true;
+      if(cycleBlocked)
+         g_SecondEntryBlocked=true;
+
       SaveSecondEntryState();
+   }
+   else
+   {
+      if(cycleDone && !g_SecondEntryDone)
+      {
+         g_SecondEntryDone=true;
+         SaveSecondEntryState();
+      }
+      if(cycleBlocked && !g_SecondEntryBlocked)
+      {
+         g_SecondEntryBlocked=true;
+         SaveSecondEntryState();
+      }
    }
 }
 
@@ -1038,6 +1203,22 @@ bool DetectPattern(int shift,bool wantBuy,PatternSignal &sig)
    }
 
    return true;
+}
+
+bool IsJustClosedThirdCandleSignal(PatternSignal &sig)
+{
+   if(!sig.ok || sig.time<=0)
+      return false;
+
+   datetime currentBar=iTime(_Symbol,_Period,0);
+   datetime justClosedBar=iTime(_Symbol,_Period,1);
+   if(currentBar<=0 || justClosedBar<=0)
+      return false;
+
+   if(currentBar<=justClosedBar)
+      return false;
+
+   return (sig.time==justClosedBar);
 }
 
 //====================================================================
@@ -1505,6 +1686,12 @@ bool ExecuteSignal(PatternSignal &sig)
    if(!sig.ok)
       return false;
 
+   if(!IsJustClosedThirdCandleSignal(sig))
+   {
+      SetLastMessage("Signal skipped - waiting for 3rd candle close",clrGold);
+      return false;
+   }
+
    string reason="";
 
    if(!CanStartModelEntry(reason))
@@ -1657,14 +1844,77 @@ double PositionRRFromValues(bool buy,double entry,double sl)
    return move/risk;
 }
 
+bool EnforceSecondEntryProtection(bool buy,double sl,double tp,string &reason)
+{
+   reason="";
+   sl=NormalizeDouble(sl,_Digits);
+   tp=NormalizeDouble(tp,_Digits);
+
+   int matched=0;
+   int failed=0;
+   bool stopsChecked=false;
+   string lastFail="";
+
+   for(int i=PositionsTotal()-1;i>=0;i--)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+
+      string sym=PositionGetString(POSITION_SYMBOL);
+      long magic=(long)PositionGetInteger(POSITION_MAGIC);
+      if(sym!=_Symbol || magic!=InpMagic)
+         continue;
+
+      bool posBuy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+      if(posBuy!=buy)
+         continue;
+
+      matched++;
+
+      double oldSL=PositionGetDouble(POSITION_SL);
+      double oldTP=PositionGetDouble(POSITION_TP);
+      bool needModify=(MathAbs(oldSL-sl)>_Point*0.5 || MathAbs(oldTP-tp)>_Point*0.5);
+      if(!needModify)
+         continue;
+
+      if(!stopsChecked)
+      {
+         if(!ValidateStops(buy,sl,tp,reason))
+            return false;
+         stopsChecked=true;
+      }
+
+      if(!Trade.PositionModify(ticket,sl,tp) || !TradeRetcodeOK())
+      {
+         failed++;
+         lastFail=Trade.ResultRetcodeDescription();
+      }
+   }
+
+   if(matched<=0)
+   {
+      reason="position not found";
+      return false;
+   }
+
+   if(failed>0)
+   {
+      reason=lastFail;
+      return false;
+   }
+
+   return true;
+}
+
 bool ExecuteSecondEntryFromBase(ulong baseTicket)
 {
    if(baseTicket==0 || !PositionSelectByTicket(baseTicket))
       return false;
 
    bool buy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
-   double baseSL=PositionGetDouble(POSITION_SL);
-   double baseTP=PositionGetDouble(POSITION_TP);
+   double baseSL=NormalizeDouble(PositionGetDouble(POSITION_SL),_Digits);
+   double baseTP=NormalizeDouble(PositionGetDouble(POSITION_TP),_Digits);
 
    if(baseSL<=0.0 || baseTP<=0.0)
    {
@@ -1748,37 +1998,31 @@ bool ExecuteSecondEntryFromBase(ulong baseTicket)
       }
    }
 
+   g_SecondEntryDone=true;
+   g_SecondEntryOn=false;
+   SetArmMode(ARM_NONE);
+   g_AutoArm=false;
+   SaveSecondEntryState();
+
    Sleep(150);
 
-   ulong protectTicket=0;
    bool protectionOK=true;
-   if(SelectNewestOurPosition())
+   if(!EnforceSecondEntryProtection(buy,baseSL,baseTP,reason))
    {
-      protectTicket=(ulong)PositionGetInteger(POSITION_TICKET);
-      bool resultBuy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
-      if(resultBuy==buy)
-      {
-         if(!ValidateStops(buy,baseSL,baseTP,reason) ||
-            !Trade.PositionModify(protectTicket,baseSL,baseTP) ||
-            !TradeRetcodeOK())
-         {
-            protectionOK=false;
-            if(reason=="")
-               reason=Trade.ResultRetcodeDescription();
-         }
-      }
+      protectionOK=false;
+      if(reason=="")
+         reason=Trade.ResultRetcodeDescription();
    }
 
    if(!protectionOK && InpCloseIfProtectionFails)
    {
+      ulong protectTicket=FindNewestOurPositionTicket(baseTicket);
+      if(protectTicket==0)
+         protectTicket=FindNewestOurPositionTicket(0);
       CloseUnprotectedPosition(protectTicket,(buy ? "BUY" : "SELL")+" second entry closed - SL/TP protection failed");
       return false;
    }
 
-   g_SecondEntryDone=true;
-   SetArmMode(ARM_NONE);
-   g_AutoArm=false;
-   SaveSecondEntryState();
    SetLastMessage((buy ? "BUY" : "SELL")+" second entry placed | Lot "+DoubleToString(lot,VolumeDigits())+
                   " | SL "+PriceText(baseSL)+" | TP "+PriceText(baseTP),clrLime);
    return true;
@@ -1801,6 +2045,7 @@ void MonitorSecondEntry()
    if(openCount>1 && !g_SecondEntryDone)
    {
       g_SecondEntryDone=true;
+      g_SecondEntryOn=false;
       SetArmMode(ARM_NONE);
       g_AutoArm=false;
       SaveSecondEntryState();
@@ -1823,6 +2068,7 @@ void MonitorSecondEntry()
       string beReason="";
       bool beOK=MoveTicketToBreakEven(g_SecondBaseTicket,beReason);
       g_SecondEntryBlocked=true;
+      g_SecondEntryOn=false;
       SetArmMode(ARM_NONE);
       g_AutoArm=false;
       SaveSecondEntryState();
@@ -1865,10 +2111,125 @@ string SecondEntryStatusText()
    return "2nd waits -"+DoubleToString(MathMax(0.1,InpSecondEntryTriggerLossR),1)+"R";
 }
 
+string FirstTrailStatusText()
+{
+   if(!g_FirstTrailOn)
+      return "1st trail OFF";
+   if(!g_SecondEntryDone)
+      return "1st trail waits 2nd";
+   if(!SelectFirstEntryPosition())
+      return "1st trade closed";
+   if(g_FirstTrailActive)
+      return "1st trail active";
+   return "1st trail waits M5";
+}
+
+void MonitorFirstTradeTrailing()
+{
+   if(!g_FirstTrailOn)
+      return;
+
+   SyncSecondEntryState();
+   SyncFirstTrailState();
+
+   if(!g_SecondEntryDone || g_FirstTrailTicket==0)
+      return;
+
+   if(!PositionSelectByTicket(g_FirstTrailTicket))
+   {
+      ResetFirstTrailState();
+      return;
+   }
+
+   if(IsSecondEntryPositionComment())
+      return;
+
+   if(iBars(_Symbol,PERIOD_M5)<4)
+      return;
+
+   datetime m5Time=iTime(_Symbol,PERIOD_M5,1);
+   if(m5Time<=0 || m5Time==g_FirstTrailLastM5BarTime)
+      return;
+
+   bool buy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+   double entry=PositionGetDouble(POSITION_PRICE_OPEN);
+   double oldSL=PositionGetDouble(POSITION_SL);
+   double tp=PositionGetDouble(POSITION_TP);
+
+   double close1=iClose(_Symbol,PERIOD_M5,1);
+   double low1=iLow(_Symbol,PERIOD_M5,1);
+   double high1=iHigh(_Symbol,PERIOD_M5,1);
+   double low2=iLow(_Symbol,PERIOD_M5,2);
+   double high2=iHigh(_Symbol,PERIOD_M5,2);
+
+   if(entry<=0.0 || close1<=0.0 || low1<=0.0 || high1<=0.0 || low2<=0.0 || high2<=0.0)
+      return;
+
+   bool trigger=false;
+   double newSL=0.0;
+
+   if(buy)
+   {
+      trigger=(!g_FirstTrailActive ? close1>entry+_Point*0.1 : close1>high2+_Point*0.1);
+      newSL=NormalizeDouble(low1,_Digits);
+   }
+   else
+   {
+      trigger=(!g_FirstTrailActive ? close1<entry-_Point*0.1 : close1<low2-_Point*0.1);
+      newSL=NormalizeDouble(high1,_Digits);
+   }
+
+   g_FirstTrailLastM5BarTime=m5Time;
+
+   if(!trigger)
+   {
+      SaveFirstTrailState();
+      return;
+   }
+
+   if(!g_FirstTrailActive)
+      g_FirstTrailActive=true;
+
+   bool improves=(oldSL<=0.0 || (buy ? newSL>oldSL+_Point*0.5 : newSL<oldSL-_Point*0.5));
+   if(!improves)
+   {
+      SaveFirstTrailState();
+      return;
+   }
+
+   string reason="";
+   if(!ValidateStops(buy,newSL,tp,reason))
+   {
+      SaveFirstTrailState();
+      SetLastMessage("1st trail skipped: "+reason,clrGold);
+      return;
+   }
+
+   ulong ticket=g_FirstTrailTicket;
+   if(Trade.PositionModify(ticket,newSL,tp) && TradeRetcodeOK())
+   {
+      SaveFirstTrailState();
+      SetLastMessage((buy ? "BUY" : "SELL")+" 1st trail SL -> "+PriceText(newSL)+" on M5 close",clrLime);
+      return;
+   }
+
+   SaveFirstTrailState();
+   SetLastMessage("1st trail failed: "+Trade.ResultRetcodeDescription(),clrTomato);
+}
+
 void TryArmedExecution()
 {
    if(g_ArmedMode==ARM_NONE && !g_AutoArm)
       return;
+
+   datetime currentBar=iTime(_Symbol,_Period,0);
+   datetime justClosedBar=iTime(_Symbol,_Period,1);
+   if(currentBar<=0 || justClosedBar<=0 || currentBar<=justClosedBar)
+      return;
+
+   if(g_LastTradeScanBarTime==currentBar)
+      return;
+   g_LastTradeScanBarTime=currentBar;
 
    string gateReason="";
    if(!CanStartModelEntry(gateReason))
@@ -1896,6 +2257,9 @@ void TryArmedExecution()
    }
 
    if(g_ArmMinSignalTime>0 && sig.time<g_ArmMinSignalTime)
+      return;
+
+   if(sig.time!=justClosedBar)
       return;
 
    if(g_LastTradeSignalTime>0 && sig.time==g_LastTradeSignalTime)
@@ -3108,6 +3472,7 @@ void BuildPanel()
    EditBox(E_PC3,DoubleToString(g_PC3_Pct,0),x+pad+riskW+gap+268,cy+93,36,24,C'12,18,30',clrYellow,7);
    Btn(B_SECOND,g_SecondEntryOn ? "2ND ON" : "2ND OFF",x+pad+riskW+gap+16,cy+122,72,24,g_SecondEntryOn ? C'20,150,65' : C'92,34,34',clrWhite,7);
    Txt(UI+"SESTAT","2nd entry OFF",x+pad+riskW+gap+94,cy+126,C'150,165,195',7,false,25);
+   Btn(B_FIRST_TRAIL,g_FirstTrailOn ? "1TR ON" : "1TR OFF",x+pad+riskW+gap+228,cy+122,72,24,g_FirstTrailOn ? C'20,150,65' : C'92,34,34',clrWhite,7);
    cy+=rowH+gap;
 
    // Message footer. Account statistics and position info are removed.
@@ -3160,7 +3525,7 @@ void UpdatePanel()
 
    string timeText=TimeToString(now,TIME_SECONDS);
    string dateText=TimeToString(now,TIME_DATE);
-   string addEntryStatus="Open positions: "+IntegerToString(openCount)+" | next fresh model can add entry";
+   string addEntryStatus="Open positions: "+IntegerToString(openCount)+" | model entries locked";
    if(hasPos)
    {
       if(!g_SecondEntryOn)
@@ -3171,25 +3536,27 @@ void UpdatePanel()
          addEntryStatus="Second entry already used for this trade";
       else if(g_SecondEntryBlocked)
          addEntryStatus="First trade reached "+DoubleToString(MathMax(0.1,InpSecondEntryCancelAtR),1)+"R, no second entry";
+      else
+         addEntryStatus="2nd waits for -"+DoubleToString(MathMax(0.1,InpSecondEntryTriggerLossR),1)+"R | same SL/TP";
    }
 
    if(g_AutoArm)
    {
       SetRect(UI+"STBG",C'28,35,12');
       SetTxt(UI+"STVAL","AUTO WAIT",clrGold);
-      SetTxt(UI+"STSUB",hasPos ? addEntryStatus : "Next fresh BUY or SELL model will enter",C'180,190,215');
+      SetTxt(UI+"STSUB",hasPos ? addEntryStatus : "Entry after 3rd candle closes",C'180,190,215');
    }
    else if(g_ArmedMode==ARM_BUY)
    {
       SetRect(UI+"STBG",C'5,50,18');
       SetTxt(UI+"STVAL","BUY WAIT",C'80,255,140');
-      SetTxt(UI+"STSUB",hasPos ? addEntryStatus : "Next fresh BUY setup will enter",C'180,190,215');
+      SetTxt(UI+"STSUB",hasPos ? addEntryStatus : "BUY enters after 3rd candle closes",C'180,190,215');
    }
    else if(g_ArmedMode==ARM_SELL)
    {
       SetRect(UI+"STBG",C'52,10,10');
       SetTxt(UI+"STVAL","SELL WAIT",C'255,105,105');
-      SetTxt(UI+"STSUB",hasPos ? addEntryStatus : "Next fresh SELL setup will enter",C'180,190,215');
+      SetTxt(UI+"STSUB",hasPos ? addEntryStatus : "SELL enters after 3rd candle closes",C'180,190,215');
    }
    else if(hasPos)
    {
@@ -3212,6 +3579,7 @@ void UpdatePanel()
           g_ArmedMode==ARM_SELL ? "ARM SELL ON" : "ARM SELL");
    SetBtn(B_PC,g_PC_On ? C'20,150,65' : C'92,34,34',clrWhite,g_PC_On ? "PART ON" : "PART OFF");
    SetBtn(B_SECOND,g_SecondEntryOn ? C'20,150,65' : C'92,34,34',clrWhite,g_SecondEntryOn ? "2ND ON" : "2ND OFF");
+   SetBtn(B_FIRST_TRAIL,g_FirstTrailOn ? C'20,150,65' : C'92,34,34',clrWhite,g_FirstTrailOn ? "1TR ON" : "1TR OFF");
    SetBtn(B_MODE_SAFE,g_AdvancedMode ? C'24,34,48' : C'0,95,170',clrWhite);
    SetBtn(B_MODE_ADV,g_AdvancedMode ? C'0,95,170' : C'24,34,48',clrWhite);
    SetBtn(B_CLOSE,hasPos ? C'110,18,24' : C'36,42,54',clrWhite);
@@ -3720,6 +4088,10 @@ string TCX_BuildStateJson()
       +",\"secondEntryStatus\":\""+TCX_JsonEscape(SecondEntryStatusText())+"\""
       +",\"secondEntryTriggerR\":"+DoubleToString(MathMax(0.1,InpSecondEntryTriggerLossR),1)
       +",\"secondEntryCancelAtR\":"+DoubleToString(MathMax(0.1,InpSecondEntryCancelAtR),1)
+      +",\"firstTrailOn\":"+TCX_BoolText(g_FirstTrailOn)
+      +",\"firstTrailActive\":"+TCX_BoolText(g_FirstTrailActive)
+      +",\"firstTrailStatus\":\""+TCX_JsonEscape(FirstTrailStatusText())+"\""
+      +",\"firstTrailTimeframe\":\"M5\""
       +",\"qualityScore\":"+IntegerToString(score)
       +",\"qualityText\":\""+QualityText(score)+"\""
       +",\"message\":\""+TCX_JsonEscape(g_LastMessage)+"\""
@@ -3895,7 +4267,7 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       else if(CanStartModelEntry(reason))
       {
          SetArmMode(ARM_BUY);
-         msg="WEB BUY armed - waiting for next model";
+         msg="WEB BUY armed - waiting for 3rd candle close";
       }
       else
       {
@@ -3914,7 +4286,7 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       else if(CanStartModelEntry(reason))
       {
          SetArmMode(ARM_SELL);
-         msg="WEB SELL armed - waiting for next model";
+         msg="WEB SELL armed - waiting for 3rd candle close";
       }
       else
       {
@@ -3933,7 +4305,7 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       else if(CanStartModelEntry(reason))
       {
          SetAutoArm(true);
-         msg="WEB auto arm enabled";
+         msg="WEB auto arm enabled - waits for 3rd candle close";
       }
       else
       {
@@ -3992,6 +4364,13 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       SyncSecondEntryState();
       msg=(g_SecondEntryOn ? "WEB second entry enabled" : "WEB second entry disabled");
       SetLastMessage(msg,g_SecondEntryOn ? clrSkyBlue : clrSilver);
+   }
+   else if(action=="TOGGLE_FIRST_TRAIL")
+   {
+      g_FirstTrailOn=!g_FirstTrailOn;
+      SyncFirstTrailState();
+      msg=(g_FirstTrailOn ? "WEB first trade M5 trailing enabled" : "WEB first trade M5 trailing disabled");
+      SetLastMessage(msg,g_FirstTrailOn ? clrSkyBlue : clrSilver);
    }
    else if(action=="SET_MODE")
    {
@@ -4133,9 +4512,15 @@ void RuntimeLoop(bool allowTradeScan)
    EnsurePanel();
    SyncPositionState();
    if(allowTradeScan)
+   {
       MonitorSecondEntry();
+      MonitorFirstTradeTrailing();
+   }
    else
+   {
       SyncSecondEntryState();
+      SyncFirstTrailState();
+   }
    TCX_SupabasePollCommands();
 
    if(g_PC_On)
@@ -4148,7 +4533,7 @@ void RuntimeLoop(bool allowTradeScan)
       DrawLatestClosedSignal();
    }
 
-   // Check armed execution EVERY tick so spread filter doesn't permanently block
+   // Trade scan is internally gated to the first tick after a candle closes.
    if(allowTradeScan && (g_ArmedMode!=ARM_NONE || g_AutoArm))
       TryArmedExecution();
 
@@ -4235,6 +4620,7 @@ int OnInit()
    g_PC_On=InpPartialCloseEnabled;
    g_AdvancedMode=InpPartialCloseEnabled;
    g_SecondEntryOn=InpSecondEntryEnabled;
+   g_FirstTrailOn=InpFirstTrailEnabled;
    g_PC1_Pct=ClampPercent(InpPC1_Percent);
    g_PC2_Pct=ClampPercent(InpPC2_Percent);
    g_PC3_Pct=ClampPercent(InpPC3_Percent);
@@ -4250,6 +4636,8 @@ int OnInit()
    BuildPanel();
    ChartHeartbeat();
    SyncPositionState();
+   SyncSecondEntryState();
+   SyncFirstTrailState();
    DrawHistoricalSignals();
    UpdatePanel();
 
@@ -4330,7 +4718,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
          return;
       }
 
-      SetLastMessage(g_ArmedMode==ARM_BUY ? "BUY armed - waiting for next model" : "BUY wait cancelled",
+      SetLastMessage(g_ArmedMode==ARM_BUY ? "BUY armed - waiting for 3rd candle close" : "BUY wait cancelled",
                      g_ArmedMode==ARM_BUY ? clrLime : clrSilver);
       UpdatePanel();
       return;
@@ -4350,7 +4738,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
          return;
       }
 
-      SetLastMessage(g_ArmedMode==ARM_SELL ? "SELL armed - waiting for next model" : "SELL wait cancelled",
+      SetLastMessage(g_ArmedMode==ARM_SELL ? "SELL armed - waiting for 3rd candle close" : "SELL wait cancelled",
                      g_ArmedMode==ARM_SELL ? clrTomato : clrSilver);
       UpdatePanel();
       return;
@@ -4370,7 +4758,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
          return;
       }
 
-      SetLastMessage(g_AutoArm ? "Auto arm enabled - waiting for next model" : "Auto arm disabled",
+      SetLastMessage(g_AutoArm ? "Auto arm enabled - waiting for 3rd candle close" : "Auto arm disabled",
                      g_AutoArm ? clrGold : clrSilver);
       UpdatePanel();
       return;
@@ -4426,6 +4814,16 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       SyncSecondEntryState();
       SetLastMessage(g_SecondEntryOn ? "Second entry enabled - waits for -0.5R before 2R" : "Second entry disabled",
                      g_SecondEntryOn ? clrSkyBlue : clrSilver);
+      UpdatePanel();
+      return;
+   }
+
+   if(sparam==B_FIRST_TRAIL)
+   {
+      g_FirstTrailOn=!g_FirstTrailOn;
+      SyncFirstTrailState();
+      SetLastMessage(g_FirstTrailOn ? "First trade M5 trailing enabled" : "First trade M5 trailing disabled",
+                     g_FirstTrailOn ? clrSkyBlue : clrSilver);
       UpdatePanel();
       return;
    }

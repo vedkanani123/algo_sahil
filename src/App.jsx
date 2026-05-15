@@ -57,6 +57,7 @@ const ACTIONS = {
   CLOSE_ALL: 'CLOSE_ALL',
   TOGGLE_PARTIALS: 'TOGGLE_PARTIALS',
   TOGGLE_SECOND_ENTRY: 'TOGGLE_SECOND_ENTRY',
+  TOGGLE_FIRST_TRAIL: 'TOGGLE_FIRST_TRAIL',
   SET_MODE: 'SET_MODE',
   SET_RISK: 'SET_RISK',
   SET_PARTIALS: 'SET_PARTIALS',
@@ -912,6 +913,7 @@ function StatusHero({ state, selected }) {
           <div className="chip">Spread <b>{s.spread ?? '--'}</b></div>
           <div className="chip">SL/TP Space <b>{s.spreadProtectionPoints ?? 0}</b></div>
           <div className="chip">2nd <b>{s.secondEntryOn ? 'ON' : 'OFF'}</b></div>
+          <div className="chip">1st Trail <b>{s.firstTrailOn ? 'ON' : 'OFF'}</b></div>
           <div className="chip">Quality <b>{s.qualityText || '--'}</b></div>
         </div>
       </div>
@@ -1129,9 +1131,11 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
           <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'advanced' })} className={s.advanced ? 'active' : ''} disabled={Boolean(busy)}>Advanced</button>
           <button onClick={() => cmd(ACTIONS.TOGGLE_PARTIALS)} className={s.partialsOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>Partials {s.partialsOn ? 'ON' : 'OFF'}</button>
           <button onClick={toggleSecondEntry} className={s.secondEntryOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>2nd {s.secondEntryOn ? 'ON' : 'OFF'}</button>
+          <button onClick={() => cmd(ACTIONS.TOGGLE_FIRST_TRAIL)} className={s.firstTrailOn ? 'active successToggle' : ''} disabled={Boolean(busy)}>1st Trail {s.firstTrailOn ? 'ON' : 'OFF'}</button>
         </div>
 
         <div className="inlineStatus">{s.secondEntryStatus || '2nd entry OFF'}</div>
+        <div className="inlineStatus">{s.firstTrailStatus || '1st trail OFF'}</div>
 
         <div className="settingsGrid">
           <StepperInput label="PC1 %" value={pc.pc1} onChange={value => updatePcField('pc1', value)} onStep={direction => stepPcField('pc1', direction)} stepLabel="+/- 1" />
