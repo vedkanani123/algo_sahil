@@ -59,7 +59,6 @@ const ACTIONS = {
   CLOSE_ALL: 'CLOSE_ALL',
   TOGGLE_PARTIALS: 'TOGGLE_PARTIALS',
   TOGGLE_SECOND_ENTRY: 'TOGGLE_SECOND_ENTRY',
-  TOGGLE_FIRST_TRAIL: 'TOGGLE_FIRST_TRAIL',
   SET_MODE: 'SET_MODE',
   SET_RISK: 'SET_RISK',
   SET_PARTIALS: 'SET_PARTIALS',
@@ -85,7 +84,7 @@ const TELEGRAM_PREFS = [
 const DEFAULT_TELEGRAM_PREFS = TELEGRAM_PREFS.reduce((acc, [key]) => ({ ...acc, [key]: true }), {})
 const LIVE_POLL_MS = 500
 const CONTROL_OPTIMISTIC_MS = 12000
-const CONTROL_KEYS = ['partialsOn', 'secondEntryOn', 'firstTrailOn']
+const CONTROL_KEYS = ['partialsOn', 'secondEntryOn']
 
 const RULE_COMPANIES = [
   { id: 'fundingpips', label: 'FundingPips', hasRules: true },
@@ -581,6 +580,13 @@ function uid() {
   return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()
 }
 
+function mergeCommandRows(rows, row) {
+  if (!row?.id) return rows
+  return [row, ...rows.filter(c => c.id !== row.id)]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, 12)
+}
+
 function Login() {
   const [mode, setMode] = useState('signin')
   const [email, setEmail] = useState('')
@@ -918,7 +924,7 @@ function StatusHero({ state, selected }) {
           <div className="chip">Spread <b>{s.spread ?? '--'}</b></div>
           <div className="chip">SL/TP Space <b>{s.spreadProtectionPoints ?? 0}</b></div>
           <div className="chip">2nd <b>{s.secondEntryOn ? 'ON' : 'OFF'}</b></div>
-          <div className="chip">1st Trail <b>{s.firstTrailOn ? 'ON' : 'OFF'}</b></div>
+          <div className="chip">1st Exit <b>{s.firstProfitExitOn === false ? 'OFF' : 'AUTO'}</b></div>
           <div className="chip">Quality <b>{s.qualityText || '--'}</b></div>
         </div>
       </div>
@@ -1006,8 +1012,7 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
   const currency = s.currency || 'Money'
   const controlState = {
     partialsOn: optimisticControlValue(optimisticControls, 'partialsOn', s.partialsOn),
-    secondEntryOn: optimisticControlValue(optimisticControls, 'secondEntryOn', s.secondEntryOn),
-    firstTrailOn: optimisticControlValue(optimisticControls, 'firstTrailOn', s.firstTrailOn)
+    secondEntryOn: optimisticControlValue(optimisticControls, 'secondEntryOn', s.secondEntryOn)
   }
   const controlStateRef = useRef(controlState)
   controlStateRef.current = controlState
@@ -1032,17 +1037,18 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
       const next = pruneOptimisticControls(prev, s)
       return Object.keys(next).length === Object.keys(prev).length ? prev : next
     })
-  }, [state?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, s.partialsOn, s.secondEntryOn, s.firstTrailOn, riskDirty, pcDirty, pendingRisk, pendingPc])
+  }, [state?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, s.partialsOn, s.secondEntryOn, riskDirty, pcDirty, pendingRisk, pendingPc])
 
   async function cmd(action, payload = {}, options = {}) {
     if (!selected?.id) return alert('Create/select EA first')
     const lock = options.lock !== false
+    const clientId = options.clientId || payload?.request_id || uid()
     if (lock) setBusy(action)
     try {
       const res = await fetch(`${functionsUrl}/create-command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ ea_id: selected.id, action, payload, client_id: uid() })
+        body: JSON.stringify({ ea_id: selected.id, action, payload, client_id: clientId })
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.ok) {
@@ -1110,7 +1116,7 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
       ...pruneOptimisticControls(prev, s, now),
       [key]: { value, at: now, requestId }
     }))
-    const ok = await cmd(ACTIONS.SET_PARTIALS, { [key]: value, request_id: requestId }, { lock: false })
+    const ok = await cmd(ACTIONS.SET_PARTIALS, { [key]: value, request_id: requestId }, { lock: false, clientId: requestId })
     if (!ok) {
       setOptimisticControls(prev => {
         if (prev[key]?.requestId !== requestId) return prev
@@ -1128,10 +1134,6 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
 
   function toggleSecondEntry() {
     return setBooleanControl('secondEntryOn', !controlStateRef.current.secondEntryOn)
-  }
-
-  function toggleFirstTrail() {
-    return setBooleanControl('firstTrailOn', !controlStateRef.current.firstTrailOn)
   }
 
   function firstBreakEven() {
@@ -1197,11 +1199,10 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
           <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'advanced' })} className={s.advanced ? 'active' : ''} disabled={busy === ACTIONS.SET_MODE}>Advanced</button>
           <button onClick={togglePartials} className={controlState.partialsOn ? 'active successToggle' : ''}>Partials {controlState.partialsOn ? 'ON' : 'OFF'}</button>
           <button onClick={toggleSecondEntry} className={controlState.secondEntryOn ? 'active successToggle' : ''}>2nd {controlState.secondEntryOn ? 'ON' : 'OFF'}</button>
-          <button onClick={toggleFirstTrail} className={controlState.firstTrailOn ? 'active successToggle' : ''}>1st Trail {controlState.firstTrailOn ? 'ON' : 'OFF'}</button>
         </div>
 
         <div className="inlineStatus">{s.secondEntryStatus || '2nd entry OFF'}</div>
-        <div className="inlineStatus">{s.firstTrailStatus || '1st trail OFF'}</div>
+        <div className="inlineStatus">{s.firstProfitExitStatus || '1st auto exit waits 2nd'}</div>
 
         <div className="settingsGrid">
           <StepperInput label="PC1 %" value={pc.pc1} onChange={value => updatePcField('pc1', value)} onStep={direction => stepPcField('pc1', direction)} stepLabel="+/- 1" />
@@ -2257,7 +2258,10 @@ function Dashboard({ session }) {
         if (payload.new) setState(payload.new)
         setLastSyncAt(new Date())
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'commands', filter: `ea_id=eq.${selectedId}` }, () => loadCommands(selectedId))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'commands', filter: `ea_id=eq.${selectedId}` }, payload => {
+        if (payload.new) setCommands(current => mergeCommandRows(current, payload.new))
+        else loadCommands(selectedId)
+      })
       .subscribe()
     return () => supabase.removeChannel(ch)
   }, [selectedId, loadCommands])

@@ -21,7 +21,7 @@ Deno.serve(async (req) => {
     if (userErr || !userData.user) return json({ ok:false, error:'Unauthorized' }, 401)
 
     const { ea_id, action, payload = {}, client_id = null } = await req.json()
-    const allowed = ['ARM_BUY','ARM_SELL','AUTO_ARM','CANCEL','CLOSE_50','BREAK_EVEN','FIRST_BE_EXIT','FIRST_BREAK_EVEN','CLOSE_ALL','TOGGLE_PARTIALS','TOGGLE_SECOND_ENTRY','TOGGLE_FIRST_TRAIL','SET_MODE','SET_RISK','SET_PARTIALS','PING']
+    const allowed = ['ARM_BUY','ARM_SELL','AUTO_ARM','CANCEL','CLOSE_50','BREAK_EVEN','FIRST_BE_EXIT','FIRST_BREAK_EVEN','CLOSE_ALL','TOGGLE_PARTIALS','TOGGLE_SECOND_ENTRY','SET_MODE','SET_RISK','SET_PARTIALS','PING']
     if (!ea_id || !allowed.includes(action)) return json({ ok:false, error:'Invalid command' }, 400)
 
     let safePayload: Record<string, unknown> = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}
@@ -47,7 +47,19 @@ Deno.serve(async (req) => {
       status: 'pending',
       expires_at: new Date(Date.now() + 45_000).toISOString()
     }).select().single()
-    if (error) throw error
+    if (error) {
+      if (error.code === '23505' && client_id) {
+        const { data: existing, error: existingErr } = await admin.from('commands')
+          .select('*')
+          .eq('ea_id', ea_id)
+          .eq('user_id', userData.user.id)
+          .eq('client_id', client_id)
+          .single()
+        if (existingErr) throw existingErr
+        return json({ ok:true, command: existing, duplicate: true })
+      }
+      throw error
+    }
 
     const backgroundTasks = Promise.allSettled([
       admin.from('audit_logs').insert({ user_id:userData.user.id, ea_id, action:'create_command', details:{ command_id:data.id, action } }),

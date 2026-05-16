@@ -27,18 +27,23 @@ Deno.serve(async (req) => {
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
     const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const admin = createClient(SUPABASE_URL, SERVICE_KEY)
-    const { ea_id, ea_token, state = {} } = await req.json()
+    const { ea_id, ea_token, state = {}, partial = false } = await req.json()
     const ea = await verifyEA(admin, ea_id, ea_token)
     const now = new Date().toISOString()
     const { data: previousRow, error: previousErr } = await admin.from('ea_states').select('state,updated_at').eq('ea_id', ea.id).maybeSingle()
     if (previousErr) throw previousErr
-    await admin.from('ea_instances').update({ last_seen_at: now, symbol: state.symbol || undefined, account_login: state.accountLogin || undefined }).eq('id', ea.id)
-    const { error } = await admin.from('ea_states').upsert({ ea_id: ea.id, user_id: ea.user_id, state, updated_at: now }, { onConflict: 'ea_id' })
+    const incomingState = state && typeof state === 'object' && !Array.isArray(state) ? state as Record<string, unknown> : {}
+    const previousState = previousRow?.state && typeof previousRow.state === 'object' && !Array.isArray(previousRow.state)
+      ? previousRow.state as Record<string, unknown>
+      : {}
+    const nextState = partial ? { ...previousState, ...incomingState } : incomingState
+    await admin.from('ea_instances').update({ last_seen_at: now, symbol: nextState.symbol || undefined, account_login: nextState.accountLogin || undefined }).eq('id', ea.id)
+    const { error } = await admin.from('ea_states').upsert({ ea_id: ea.id, user_id: ea.user_id, state: nextState, updated_at: now }, { onConflict: 'ea_id' })
     if (error) throw error
 
     const notifyTask = (async () => {
       const { data: status } = await admin.from('telegram_ea_status').select('is_online').eq('ea_id', ea.id).maybeSingle()
-      if (!status?.is_online) await notifyEaOnline(admin, ea, state, now)
+      if (!status?.is_online) await notifyEaOnline(admin, ea, nextState, now)
       else {
         await admin.from('telegram_ea_status').upsert({
           ea_id: ea.id,
@@ -48,7 +53,7 @@ Deno.serve(async (req) => {
           updated_at: now,
         }, { onConflict: 'ea_id' })
       }
-      await notifyStateChanges(admin, ea, previousRow?.state || null, state, now)
+      await notifyStateChanges(admin, ea, previousRow?.state || null, nextState, now)
     })().catch((notifyErr) => {
       console.error('telegram state notification failed', notifyErr)
     })

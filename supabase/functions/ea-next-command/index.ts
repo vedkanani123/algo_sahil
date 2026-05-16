@@ -20,6 +20,12 @@ async function verifyEA(admin: any, ea_id: string, ea_token: string) {
   return ea
 }
 
+function waitUntil(task: Promise<unknown>) {
+  ;(globalThis as any).EdgeRuntime?.waitUntil?.(task.catch((err) => {
+    console.error('ea-next-command background maintenance failed', err)
+  }))
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   try {
@@ -27,17 +33,36 @@ Deno.serve(async (req) => {
     const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const admin = createClient(SUPABASE_URL, SERVICE_KEY)
     const { ea_id, ea_token } = await req.json()
-    const ea = await verifyEA(admin, ea_id, ea_token)
 
-    await admin.from('ea_instances').update({ last_seen_at: new Date().toISOString() }).eq('id', ea.id)
-    await admin.from('commands').update({ status:'expired', result_message:'Expired before EA pickup' })
-      .eq('ea_id', ea.id).eq('status','pending').lt('expires_at', new Date().toISOString())
+    const { data: claimed, error: rpcErr } = await admin.rpc('claim_next_command', {
+      p_ea_id: ea_id,
+      p_ea_token: ea_token,
+    })
+    if (!rpcErr) {
+      if (!claimed?.ok) return json({ ok:false, error: claimed?.error || 'Invalid EA credentials' }, 401)
+      return json(claimed)
+    }
+    console.warn('claim_next_command unavailable, using compatibility path', rpcErr)
+
+    const ea = await verifyEA(admin, ea_id, ea_token)
+    const now = new Date()
+    const nowIso = now.toISOString()
+    const staleHeartbeat = new Date(now.getTime() - 2_000).toISOString()
+
+    waitUntil(Promise.allSettled([
+      admin.from('ea_instances')
+        .update({ last_seen_at: nowIso })
+        .eq('id', ea.id)
+        .or(`last_seen_at.is.null,last_seen_at.lt.${staleHeartbeat}`),
+      admin.from('commands').update({ status:'expired', result_message:'Expired before EA pickup' })
+        .eq('ea_id', ea.id).eq('status','pending').lt('expires_at', nowIso),
+    ]))
 
     const { data: cmd, error } = await admin.from('commands')
       .select('id, action, payload, created_at, expires_at')
       .eq('ea_id', ea.id)
       .eq('status', 'pending')
-      .gt('expires_at', new Date().toISOString())
+      .gt('expires_at', nowIso)
       .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle()

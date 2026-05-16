@@ -3,7 +3,7 @@
 //| Indicator-matched model detection with armed BUY/SELL execution   |
 //+------------------------------------------------------------------+
 #property copyright "Three Candle Execution Controller"
-#property version   "1.298"
+#property version   "1.300"
 #property description "Attach to a chart as an Expert Advisor. BUY/SELL buttons arm the next matching 3-candle model."
 #property strict
 
@@ -59,8 +59,8 @@ input bool              InpSecondEntryEnabled   = false;
 input double            InpSecondEntryTriggerLossR = 0.5;
 input double            InpSecondEntryCancelAtR = 2.0;
 
-input group "FIRST TRADE TRAILING"
-input bool              InpFirstTrailEnabled    = false;
+input group "FIRST TRADE AUTO EXIT"
+input bool              InpFirstProfitExitEnabled = true;
 
 input group "LOT PANEL"
 input double            InpLotButtonStep        = 0.01;
@@ -92,7 +92,7 @@ input bool              InpWebControlEnabled       = true;
 input string            InpSupabaseFunctionsUrl    = "https://YOUR_PROJECT_REF.functions.supabase.co";
 input string            InpSupabaseEaId            = "PASTE_EA_ID_FROM_WEBSITE";
 input string            InpSupabaseEaToken         = "PASTE_EA_SECRET_TOKEN_FROM_WEBSITE";
-input int               InpWebPollMilliseconds     = 200;
+input int               InpWebPollMilliseconds     = 100;
 input int               InpWebTimeoutMs            = 1500;
 input bool              InpWebPostLiveState        = true;
 input bool              InpWebAllowCloseCommands   = true;
@@ -125,7 +125,6 @@ string UI = "TCX_UI_";
 #define B_MODE_SAFE "TCX_UI_B_MODE_SAFE"
 #define B_MODE_ADV  "TCX_UI_B_MODE_ADV"
 #define B_SECOND    "TCX_UI_B_SECOND"
-#define B_FIRST_TRAIL "TCX_UI_B_FIRST_TRAIL"
 #define B_FIRST_BE  "TCX_UI_B_FIRST_BE"
 #define B_FIRST_BE_EXIT "TCX_UI_B_FIRST_BE_EXIT"
 
@@ -157,7 +156,7 @@ bool     g_PC_On         = false;
 bool     g_AutoArm       = false;
 bool     g_AdvancedMode  = false;
 bool     g_SecondEntryOn = false;
-bool     g_FirstTrailOn  = false;
+bool     g_FirstProfitExitOn = true;
 double   g_PC1_Pct       = 30.0;
 double   g_PC2_Pct       = 30.0;
 double   g_PC3_Pct       = 40.0;
@@ -175,9 +174,7 @@ bool     g_SecondEntryDone  = false;
 bool     g_SecondEntryBlocked = false;
 datetime g_SecondEntryLastAttempt = 0;
 
-ulong    g_FirstTrailTicket = 0;
-bool     g_FirstTrailActive = false;
-datetime g_FirstTrailLastM5BarTime = 0;
+datetime g_FirstProfitExitLastFailure = 0;
 
 string   g_LastMessage   = "Ready";
 color    g_LastMsgColor  = clrSilver;
@@ -924,50 +921,6 @@ void ResetSecondEntryState()
    g_SecondEntryBlocked=false;
    g_SecondEntryLastAttempt=0;
    ClearSecondEntryCycleState();
-}
-
-void SaveFirstTrailState()
-{
-   if(g_FirstTrailTicket==0)
-      return;
-
-   GlobalVariableSet(StateKey(g_FirstTrailTicket,"first_trail_active"),g_FirstTrailActive ? 1.0 : 0.0);
-   GlobalVariableSet(StateKey(g_FirstTrailTicket,"first_trail_last_m5"),(double)g_FirstTrailLastM5BarTime);
-}
-
-void ResetFirstTrailState()
-{
-   g_FirstTrailTicket=0;
-   g_FirstTrailActive=false;
-   g_FirstTrailLastM5BarTime=0;
-}
-
-void SyncFirstTrailState()
-{
-   if(!SelectFirstEntryPosition())
-   {
-      ResetFirstTrailState();
-      return;
-   }
-
-   ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
-   if(ticket!=g_FirstTrailTicket)
-   {
-      g_FirstTrailTicket=ticket;
-
-      double stored=0.0;
-      if(LoadStateValue(ticket,"first_trail_active",stored))
-         g_FirstTrailActive=(stored>=0.5);
-      else
-         g_FirstTrailActive=false;
-
-      if(LoadStateValue(ticket,"first_trail_last_m5",stored) && stored>0.0)
-         g_FirstTrailLastM5BarTime=(datetime)stored;
-      else
-         g_FirstTrailLastM5BarTime=0;
-
-      SaveFirstTrailState();
-   }
 }
 
 void SyncSecondEntryState()
@@ -2117,110 +2070,23 @@ string SecondEntryStatusText()
    return "2nd waits -"+DoubleToString(MathMax(0.1,InpSecondEntryTriggerLossR),1)+"R";
 }
 
-string FirstTrailStatusText()
+string FirstProfitExitStatusText()
 {
-   if(!g_FirstTrailOn)
-      return "1st trail OFF";
-   if(!g_SecondEntryDone)
-      return "1st trail waits 2nd";
+   if(!g_FirstProfitExitOn)
+      return "1st auto exit OFF";
+   if(CountOurPositions()<2)
+      return "1st auto exit waits 2nd";
    if(!SelectFirstEntryPosition())
       return "1st trade closed";
-   if(g_FirstTrailActive)
-      return "1st trail active";
-   return "1st trail waits M5";
-}
 
-void MonitorFirstTradeTrailing()
-{
-   if(!g_FirstTrailOn)
-      return;
-
-   SyncSecondEntryState();
-   SyncFirstTrailState();
-
-   if(!g_SecondEntryDone || g_FirstTrailTicket==0)
-      return;
-
-   if(!PositionSelectByTicket(g_FirstTrailTicket))
-   {
-      ResetFirstTrailState();
-      return;
-   }
-
-   if(IsSecondEntryPositionComment())
-      return;
-
-   if(iBars(_Symbol,PERIOD_M5)<4)
-      return;
-
-   datetime m5Time=iTime(_Symbol,PERIOD_M5,1);
-   if(m5Time<=0 || m5Time==g_FirstTrailLastM5BarTime)
-      return;
-
-   bool buy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
-   double entry=PositionGetDouble(POSITION_PRICE_OPEN);
-   double oldSL=PositionGetDouble(POSITION_SL);
-   double tp=PositionGetDouble(POSITION_TP);
-
-   double close1=iClose(_Symbol,PERIOD_M5,1);
-   double low1=iLow(_Symbol,PERIOD_M5,1);
-   double high1=iHigh(_Symbol,PERIOD_M5,1);
-   double low2=iLow(_Symbol,PERIOD_M5,2);
-   double high2=iHigh(_Symbol,PERIOD_M5,2);
-
-   if(entry<=0.0 || close1<=0.0 || low1<=0.0 || high1<=0.0 || low2<=0.0 || high2<=0.0)
-      return;
-
-   bool trigger=false;
-   double newSL=0.0;
-
-   if(buy)
-   {
-      trigger=(!g_FirstTrailActive ? close1>entry+_Point*0.1 : close1>high2+_Point*0.1);
-      newSL=NormalizeDouble(low1,_Digits);
-   }
-   else
-   {
-      trigger=(!g_FirstTrailActive ? close1<entry-_Point*0.1 : close1<low2-_Point*0.1);
-      newSL=NormalizeDouble(high1,_Digits);
-   }
-
-   g_FirstTrailLastM5BarTime=m5Time;
-
-   if(!trigger)
-   {
-      SaveFirstTrailState();
-      return;
-   }
-
-   if(!g_FirstTrailActive)
-      g_FirstTrailActive=true;
-
-   bool improves=(oldSL<=0.0 || (buy ? newSL>oldSL+_Point*0.5 : newSL<oldSL-_Point*0.5));
-   if(!improves)
-   {
-      SaveFirstTrailState();
-      return;
-   }
-
+   ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+   double expectedNet=0.0;
    string reason="";
-   if(!ValidateStops(buy,newSL,tp,reason))
-   {
-      SaveFirstTrailState();
-      SetLastMessage("1st trail skipped: "+reason,clrGold);
-      return;
-   }
-
-   ulong ticket=g_FirstTrailTicket;
-   if(Trade.PositionModify(ticket,newSL,tp) && TradeRetcodeOK())
-   {
-      SaveFirstTrailState();
-      SetLastMessage((buy ? "BUY" : "SELL")+" 1st trail SL -> "+PriceText(newSL)+" on M5 close",clrLime);
-      return;
-   }
-
-   SaveFirstTrailState();
-   SetLastMessage("1st trail failed: "+Trade.ResultRetcodeDescription(),clrTomato);
+   if(!ExpectedCloseNetForTicket(ticket,expectedNet,reason))
+      return "1st auto exit waits price";
+   if(expectedNet>=0.0)
+      return "1st auto exit ready";
+   return "1st auto exit waits profit";
 }
 
 void TryArmedExecution()
@@ -2649,18 +2515,20 @@ void MoveFirstTradeToBreakEven()
    SetLastMessage("First BE failed: "+reason,clrTomato);
 }
 
-void CloseFirstTradeAtBreakEvenExit()
+bool CloseFirstTradeAtBreakEvenExitCore(bool manual)
 {
    if(CountOurPositions()<2)
    {
-      SetLastMessage("1st BE exit waits until the second trade is open",clrGold);
-      return;
+      if(manual)
+         SetLastMessage("1st BE exit waits until the second trade is open",clrGold);
+      return false;
    }
 
    if(!SelectFirstEntryPosition())
    {
-      SetLastMessage("No first trade for BE exit",clrGold);
-      return;
+      if(manual)
+         SetLastMessage("No first trade for BE exit",clrGold);
+      return false;
    }
 
    ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
@@ -2668,27 +2536,55 @@ void CloseFirstTradeAtBreakEvenExit()
    string reason="";
    if(!ExpectedCloseNetForTicket(ticket,expectedNet,reason))
    {
-      SetLastMessage("1st BE exit failed: "+reason,clrTomato);
-      return;
+      if(manual)
+         SetLastMessage("1st BE exit failed: "+reason,clrTomato);
+      return false;
    }
 
-   if(expectedNet<-0.01)
+   if(expectedNet<0.0)
    {
-      SetLastMessage("1st BE exit blocked - net would be "+SignedMoneyText(expectedNet)+" after spread/commission",clrGold);
-      return;
+      if(manual)
+         SetLastMessage("1st BE exit blocked - net would be "+SignedMoneyText(expectedNet)+" after spread/commission",clrGold);
+      return false;
    }
 
    if(Trade.PositionClose(ticket) && TradeRetcodeOK())
    {
       if(ticket==g_StateTicket)
          ResetLocalTradeState();
-      if(ticket==g_FirstTrailTicket)
-         ResetFirstTrailState();
-      SetLastMessage("First trade BE exit closed | est net "+SignedMoneyText(expectedNet),clrLime);
-      return;
+      SetLastMessage((manual ? "First trade BE exit closed" : "First trade auto profit exit closed")+
+                     " | est net "+SignedMoneyText(expectedNet),clrLime);
+      return true;
    }
 
-   SetLastMessage("1st BE exit failed: "+Trade.ResultRetcodeDescription(),clrTomato);
+   datetime now=TimeCurrent();
+   if(manual || g_FirstProfitExitLastFailure==0 || now-g_FirstProfitExitLastFailure>=2)
+   {
+      g_FirstProfitExitLastFailure=now;
+      SetLastMessage((manual ? "1st BE exit failed: " : "1st auto exit failed: ")+Trade.ResultRetcodeDescription(),clrTomato);
+   }
+   return false;
+}
+
+void CloseFirstTradeAtBreakEvenExit()
+{
+   CloseFirstTradeAtBreakEvenExitCore(true);
+}
+
+void MonitorFirstTradeProfitExit()
+{
+   if(!g_FirstProfitExitOn)
+      return;
+
+   SyncSecondEntryState();
+
+   if(!g_SecondEntryDone && CountOurPositions()<2)
+      return;
+
+   if(CountOurPositions()<2)
+      return;
+
+   CloseFirstTradeAtBreakEvenExitCore(false);
 }
 
 void CloseAllPositions()
@@ -3644,7 +3540,7 @@ void BuildPanel()
    EditBox(E_PC3,DoubleToString(g_PC3_Pct,0),x+pad+riskW+gap+268,cy+93,36,24,C'12,18,30',clrYellow,7);
    Btn(B_SECOND,g_SecondEntryOn ? "2ND ON" : "2ND OFF",x+pad+riskW+gap+16,cy+122,72,24,g_SecondEntryOn ? C'20,150,65' : C'92,34,34',clrWhite,7);
    Txt(UI+"SESTAT","2nd entry OFF",x+pad+riskW+gap+94,cy+126,C'150,165,195',7,false,25);
-   Btn(B_FIRST_TRAIL,g_FirstTrailOn ? "1TR ON" : "1TR OFF",x+pad+riskW+gap+228,cy+122,72,24,g_FirstTrailOn ? C'20,150,65' : C'92,34,34',clrWhite,7);
+   Txt(UI+"FPESTAT","1st auto exit waits 2nd",x+pad+riskW+gap+224,cy+126,C'150,165,195',7,false,25);
    cy+=rowH+gap;
 
    // Message footer. Account statistics and position info are removed.
@@ -3753,7 +3649,6 @@ void UpdatePanel()
           g_ArmedMode==ARM_SELL ? "ARM SELL ON" : "ARM SELL");
    SetBtn(B_PC,g_PC_On ? C'20,150,65' : C'92,34,34',clrWhite,g_PC_On ? "PART ON" : "PART OFF");
    SetBtn(B_SECOND,g_SecondEntryOn ? C'20,150,65' : C'92,34,34',clrWhite,g_SecondEntryOn ? "2ND ON" : "2ND OFF");
-   SetBtn(B_FIRST_TRAIL,g_FirstTrailOn ? C'20,150,65' : C'92,34,34',clrWhite,g_FirstTrailOn ? "1TR ON" : "1TR OFF");
    SetBtn(B_MODE_SAFE,g_AdvancedMode ? C'24,34,48' : C'0,95,170',clrWhite);
    SetBtn(B_MODE_ADV,g_AdvancedMode ? C'0,95,170' : C'24,34,48',clrWhite);
    SetBtn(B_CLOSE,hasPos ? C'110,18,24' : C'36,42,54',clrWhite);
@@ -3840,6 +3735,7 @@ void UpdatePanel()
       SetTxt(UI+"PCSTAT",g_PC_On ? "Partials ready" : "Partials OFF",g_PC_On ? clrSkyBlue : clrGray);
    }
    SetTxt(UI+"SESTAT",SecondEntryStatusText(),g_SecondEntryOn ? clrSkyBlue : clrGray);
+   SetTxt(UI+"FPESTAT",FirstProfitExitStatusText(),g_FirstProfitExitOn ? clrSkyBlue : clrGray);
 
    if(hasPos)
    {
@@ -3902,6 +3798,7 @@ void UpdatePanel()
 void RefreshLotEdit();
 void RefreshRiskEdit();
 void TCX_SupabasePostState(bool force);
+void TCX_SupabasePostFastState(bool force);
 
 string TCX_TrimRightSlash(string url)
 {
@@ -4265,10 +4162,8 @@ string TCX_BuildStateJson()
       +",\"secondEntryStatus\":\""+TCX_JsonEscape(SecondEntryStatusText())+"\""
       +",\"secondEntryTriggerR\":"+DoubleToString(MathMax(0.1,InpSecondEntryTriggerLossR),1)
       +",\"secondEntryCancelAtR\":"+DoubleToString(MathMax(0.1,InpSecondEntryCancelAtR),1)
-      +",\"firstTrailOn\":"+TCX_BoolText(g_FirstTrailOn)
-      +",\"firstTrailActive\":"+TCX_BoolText(g_FirstTrailActive)
-      +",\"firstTrailStatus\":\""+TCX_JsonEscape(FirstTrailStatusText())+"\""
-      +",\"firstTrailTimeframe\":\"M5\""
+      +",\"firstProfitExitOn\":"+TCX_BoolText(g_FirstProfitExitOn)
+      +",\"firstProfitExitStatus\":\""+TCX_JsonEscape(FirstProfitExitStatusText())+"\""
       +",\"qualityScore\":"+IntegerToString(score)
       +",\"qualityText\":\""+QualityText(score)+"\""
       +",\"message\":\""+TCX_JsonEscape(g_LastMessage)+"\""
@@ -4308,6 +4203,40 @@ string TCX_BuildStateJson()
       +",\"position\":"+TCX_PositionJson()
       +",\"structure\":"+TCX_StructureJson()
       +",\"tradeHistory\":"+TCX_TradeHistoryJson(50)
+      +"}";
+}
+
+string TCX_BuildFastStateJson()
+{
+   datetime now=TimeCurrent();
+   return "{"
+      +"\"source\":\"mt5-ea\""
+      +",\"serverTime\":\""+TCX_JsonEscape(TimeToString(now,TIME_DATE|TIME_SECONDS))+"\""
+      +",\"accountLogin\":\""+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"\""
+      +",\"symbol\":\""+TCX_JsonEscape(_Symbol)+"\""
+      +",\"period\":\""+TCX_JsonEscape(EnumToString(_Period))+"\""
+      +",\"eaOnline\":true"
+      +",\"webConnected\":"+TCX_BoolText(g_WebConnected)
+      +",\"webError\":\""+TCX_JsonEscape(g_WebLastError)+"\""
+      +",\"status\":\""+TCX_CommandStatusText()+"\""
+      +",\"arm\":\""+TCX_ArmText()+"\""
+      +",\"autoArm\":"+TCX_BoolText(g_AutoArm)
+      +",\"advanced\":"+TCX_BoolText(g_AdvancedMode)
+      +",\"partialsOn\":"+TCX_BoolText(g_PC_On)
+      +",\"secondEntryOn\":"+TCX_BoolText(g_SecondEntryOn)
+      +",\"secondEntryDone\":"+TCX_BoolText(g_SecondEntryDone)
+      +",\"secondEntryBlocked\":"+TCX_BoolText(g_SecondEntryBlocked)
+      +",\"secondEntryStatus\":\""+TCX_JsonEscape(SecondEntryStatusText())+"\""
+      +",\"firstProfitExitOn\":"+TCX_BoolText(g_FirstProfitExitOn)
+      +",\"firstProfitExitStatus\":\""+TCX_JsonEscape(FirstProfitExitStatusText())+"\""
+      +",\"message\":\""+TCX_JsonEscape(g_LastMessage)+"\""
+      +",\"lot\":"+DoubleToString(g_Lot,VolumeDigits())
+      +",\"risk\":"+DoubleToString(g_RiskMoney,2)
+      +",\"rr\":"+DoubleToString(EffectiveRR(),1)
+      +",\"pc1\":"+DoubleToString(g_PC1_Pct,1)
+      +",\"pc2\":"+DoubleToString(g_PC2_Pct,1)
+      +",\"pc3\":"+DoubleToString(g_PC3_Pct,1)
+      +",\"position\":"+TCX_PositionJson()
       +"}";
 }
 
@@ -4558,13 +4487,6 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       msg=(g_SecondEntryOn ? "WEB second entry enabled" : "WEB second entry disabled");
       SetLastMessage(msg,g_SecondEntryOn ? clrSkyBlue : clrSilver);
    }
-   else if(action=="TOGGLE_FIRST_TRAIL")
-   {
-      g_FirstTrailOn=!g_FirstTrailOn;
-      SyncFirstTrailState();
-      msg=(g_FirstTrailOn ? "WEB first trade M5 trailing enabled" : "WEB first trade M5 trailing disabled");
-      SetLastMessage(msg,g_FirstTrailOn ? clrSkyBlue : clrSilver);
-   }
    else if(action=="SET_MODE")
    {
       string mode=TCX_JsonString(raw,"mode","safe");
@@ -4604,7 +4526,6 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       g_PC3_Pct=ClampPercent(TCX_JsonNumber(raw,"pc3",g_PC3_Pct));
       bool explicitPartials=TCX_JsonHasKey(raw,"partialsOn");
       bool explicitSecond=TCX_JsonHasKey(raw,"secondEntryOn");
-      bool explicitFirstTrail=TCX_JsonHasKey(raw,"firstTrailOn");
       bool firstBeRequested=TCX_JsonBool(raw,"firstBreakEven",false);
       bool firstBeExitRequested=TCX_JsonBool(raw,"firstBeExit",false);
 
@@ -4620,12 +4541,6 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
             g_AutoArm=false;
          }
          SyncSecondEntryState();
-      }
-
-      if(explicitFirstTrail)
-      {
-         g_FirstTrailOn=TCX_JsonBool(raw,"firstTrailOn",g_FirstTrailOn);
-         SyncFirstTrailState();
       }
 
       SetEditText(E_PC1,g_PC1_Pct,0);
@@ -4644,7 +4559,7 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       }
       else
       {
-         msg=(explicitPartials || explicitSecond || explicitFirstTrail) ? "WEB trade controls updated" : "WEB partial values updated";
+         msg=(explicitPartials || explicitSecond) ? "WEB trade controls updated" : "WEB partial values updated";
          SetLastMessage(msg,clrSilver);
       }
    }
@@ -4684,7 +4599,7 @@ void TCX_SupabasePollCommands()
       return;
 
    uint nowTick=GetTickCount();
-   int ms=MathMax(200,InpWebPollMilliseconds);
+   int ms=MathMax(100,InpWebPollMilliseconds);
    if(g_WebLastPollTick>0 && (uint)(nowTick-g_WebLastPollTick)<(uint)ms)
       return;
    g_WebLastPollTick=nowTick;
@@ -4704,6 +4619,7 @@ void TCX_SupabasePollCommands()
       return;
 
    bool ok=TCX_ApplyWebCommand(id,action,res);
+   TCX_SupabasePostFastState(true);
    TCX_AckCommand(id,ok ? "done" : "failed",g_LastMessage);
 }
 
@@ -4724,6 +4640,23 @@ void TCX_SupabasePostState(bool force)
       g_WebStateDirty=false;
 }
 
+void TCX_SupabasePostFastState(bool force)
+{
+   if(!TCX_WebReady() || !InpWebPostLiveState)
+      return;
+
+   uint nowTick=GetTickCount();
+   int ms=250;
+   if(!force && g_WebLastPostTick>0 && (uint)(nowTick-g_WebLastPostTick)<(uint)ms)
+      return;
+   g_WebLastPostTick=nowTick;
+
+   string res="";
+   string body="{\"ea_id\":\""+TCX_JsonEscape(InpSupabaseEaId)+"\",\"ea_token\":\""+TCX_JsonEscape(InpSupabaseEaToken)+"\",\"partial\":true,\"state\":"+TCX_BuildFastStateJson()+"}";
+   if(TCX_HttpPostFunction("ea-post-state",body,res))
+      g_WebStateDirty=false;
+}
+
 void EnsurePanel()
 {
    if(!g_PanelBuilt || ObjectFind(0,UI+"BG")<0 || ObjectFind(0,B_BUY)<0 || ObjectFind(0,B_SELL)<0)
@@ -4740,12 +4673,11 @@ void RuntimeLoop(bool allowTradeScan)
    if(allowTradeScan)
    {
       MonitorSecondEntry();
-      MonitorFirstTradeTrailing();
+      MonitorFirstTradeProfitExit();
    }
    else
    {
       SyncSecondEntryState();
-      SyncFirstTrailState();
    }
    TCX_SupabasePollCommands();
 
@@ -4797,6 +4729,7 @@ void HandleLotEdit()
    RefreshLotEdit();
    SetLastMessage("Lot set to "+DoubleToString(g_Lot,VolumeDigits()),clrSilver);
    UpdatePanel();
+   TCX_SupabasePostFastState(true);
 }
 
 void HandleRiskEdit()
@@ -4806,6 +4739,7 @@ void HandleRiskEdit()
    RefreshRiskEdit();
    SetLastMessage("Risk set to "+MoneyText(g_RiskMoney),clrSilver);
    UpdatePanel();
+   TCX_SupabasePostFastState(true);
 }
 
 void HandlePartialEdit(string obj)
@@ -4830,6 +4764,7 @@ void HandlePartialEdit(string obj)
 
    SetLastMessage("Partial book values updated",clrSilver);
    UpdatePanel();
+   TCX_SupabasePostFastState(true);
 }
 
 //====================================================================
@@ -4846,7 +4781,7 @@ int OnInit()
    g_PC_On=InpPartialCloseEnabled;
    g_AdvancedMode=InpPartialCloseEnabled;
    g_SecondEntryOn=InpSecondEntryEnabled;
-   g_FirstTrailOn=InpFirstTrailEnabled;
+   g_FirstProfitExitOn=InpFirstProfitExitEnabled;
    g_PC1_Pct=ClampPercent(InpPC1_Percent);
    g_PC2_Pct=ClampPercent(InpPC2_Percent);
    g_PC3_Pct=ClampPercent(InpPC3_Percent);
@@ -4863,14 +4798,13 @@ int OnInit()
    ChartHeartbeat();
    SyncPositionState();
    SyncSecondEntryState();
-   SyncFirstTrailState();
    DrawHistoricalSignals();
    UpdatePanel();
 
    SetLastMessage("Controller ready - buttons wait for next model, spread no block",clrSilver);
    UpdatePanel();
    if(InpWebControlEnabled)
-      EventSetMillisecondTimer(MathMax(200,InpWebPollMilliseconds));
+      EventSetMillisecondTimer(MathMax(100,InpWebPollMilliseconds));
    else
       EventSetTimer(1);
    ChartRedraw();
@@ -4894,6 +4828,12 @@ void OnTick()
 void OnTimer()
 {
    RuntimeLoop(false);
+}
+
+void TCX_FinishLocalControl()
+{
+   UpdatePanel();
+   TCX_SupabasePostFastState(true);
 }
 
 void OnChartEvent(const int id,const long &lparam,const double &dparam,const string &sparam)
@@ -4940,13 +4880,13 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       else
       {
          SetLastMessage(reason,clrGold);
-         UpdatePanel();
+         TCX_FinishLocalControl();
          return;
       }
 
       SetLastMessage(g_ArmedMode==ARM_BUY ? "BUY armed - waiting for 3rd candle close" : "BUY wait cancelled",
                      g_ArmedMode==ARM_BUY ? clrLime : clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -4960,13 +4900,13 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       else
       {
          SetLastMessage(reason,clrGold);
-         UpdatePanel();
+         TCX_FinishLocalControl();
          return;
       }
 
       SetLastMessage(g_ArmedMode==ARM_SELL ? "SELL armed - waiting for 3rd candle close" : "SELL wait cancelled",
                      g_ArmedMode==ARM_SELL ? clrTomato : clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -4980,13 +4920,13 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       else
       {
          SetLastMessage(reason,clrGold);
-         UpdatePanel();
+         TCX_FinishLocalControl();
          return;
       }
 
       SetLastMessage(g_AutoArm ? "Auto arm enabled - waiting for 3rd candle close" : "Auto arm disabled",
                      g_AutoArm ? clrGold : clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -4995,42 +4935,42 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       SetArmMode(ARM_NONE);
       g_AutoArm=false;
       SetLastMessage("Waiting mode cancelled",clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
    if(sparam==B_CLOSE || sparam==B_CLOSE_ALL)
    {
       CloseAllPositions();
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
    if(sparam==B_CLOSE50)
    {
       CloseCurrentPercent(50.0);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
    if(sparam==B_BE)
    {
       MoveToBreakEven();
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
    if(sparam==B_FIRST_BE)
    {
       MoveFirstTradeToBreakEven();
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
    if(sparam==B_FIRST_BE_EXIT)
    {
       CloseFirstTradeAtBreakEvenExit();
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -5039,7 +4979,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       g_PC_On=!g_PC_On;
       SetLastMessage(g_PC_On ? "Partial close enabled" : "Partial close disabled",
                      g_PC_On ? clrSkyBlue : clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -5054,17 +4994,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       SyncSecondEntryState();
       SetLastMessage(g_SecondEntryOn ? "Second entry enabled - waits for -0.5R before 2R" : "Second entry disabled",
                      g_SecondEntryOn ? clrSkyBlue : clrSilver);
-      UpdatePanel();
-      return;
-   }
-
-   if(sparam==B_FIRST_TRAIL)
-   {
-      g_FirstTrailOn=!g_FirstTrailOn;
-      SyncFirstTrailState();
-      SetLastMessage(g_FirstTrailOn ? "First trade M5 trailing enabled" : "First trade M5 trailing disabled",
-                     g_FirstTrailOn ? clrSkyBlue : clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -5073,7 +5003,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       g_AdvancedMode=false;
       g_PC_On=false;
       SetLastMessage("Safe mode: fixed TP, no partials",clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -5082,7 +5012,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       g_AdvancedMode=true;
       g_PC_On=true;
       SetLastMessage("Advanced mode: partials and BE controls ready",clrSkyBlue);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -5094,7 +5024,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       g_Lot=NormalizeVolumeForPanel(g_Lot+step);
       RefreshLotEdit();
       SetLastMessage("Lot set to "+DoubleToString(g_Lot,VolumeDigits()),clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -5106,7 +5036,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       g_Lot=NormalizeVolumeForPanel(g_Lot-step);
       RefreshLotEdit();
       SetLastMessage("Lot set to "+DoubleToString(g_Lot,VolumeDigits()),clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -5118,7 +5048,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       g_RiskMoney=NormalizeRiskMoney(g_RiskMoney+step);
       RefreshRiskEdit();
       SetLastMessage("Risk set to "+MoneyText(g_RiskMoney),clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -5130,7 +5060,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       g_RiskMoney=NormalizeRiskMoney(g_RiskMoney-step);
       RefreshRiskEdit();
       SetLastMessage("Risk set to "+MoneyText(g_RiskMoney),clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -5139,7 +5069,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       g_RRTarget=MathMin(20.0,g_RRTarget+0.1);
       g_RRTarget=NormalizeDouble(g_RRTarget,1);
       SetLastMessage("RR target set to 1:"+DoubleToString(g_RRTarget,1),clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 
@@ -5148,7 +5078,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       g_RRTarget=MathMax(0.1,g_RRTarget-0.1);
       g_RRTarget=NormalizeDouble(g_RRTarget,1);
       SetLastMessage("RR target set to 1:"+DoubleToString(g_RRTarget,1),clrSilver);
-      UpdatePanel();
+      TCX_FinishLocalControl();
       return;
    }
 }

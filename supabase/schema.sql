@@ -105,6 +105,9 @@ create table if not exists public.telegram_ea_status (
 
 create index if not exists idx_ea_instances_user_id on public.ea_instances(user_id);
 create index if not exists idx_commands_ea_pending on public.commands(ea_id, status, created_at);
+create index if not exists idx_commands_pending_fast on public.commands(ea_id, created_at) where status = 'pending';
+create index if not exists idx_commands_pending_expiry on public.commands(ea_id, expires_at) where status = 'pending';
+create unique index if not exists idx_commands_ea_client_id_unique on public.commands(ea_id, client_id) where client_id is not null;
 create index if not exists idx_commands_user_created on public.commands(user_id, created_at desc);
 create index if not exists idx_notification_events_user_created on public.notification_events(user_id, created_at desc);
 create index if not exists idx_telegram_ea_status_user_id on public.telegram_ea_status(user_id);
@@ -159,3 +162,68 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
+
+create or replace function public.claim_next_command(p_ea_id uuid, p_ea_token text)
+returns jsonb as $$
+declare
+  v_ea record;
+  v_cmd record;
+  v_now timestamptz := now();
+begin
+  select id, user_id
+    into v_ea
+  from public.ea_instances
+  where id = p_ea_id
+    and enabled = true
+    and token_hash = encode(digest(coalesce(p_ea_token, ''), 'sha256'), 'hex');
+
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'EA not found or invalid token');
+  end if;
+
+  update public.ea_instances
+     set last_seen_at = v_now
+   where id = v_ea.id
+     and (last_seen_at is null or last_seen_at < v_now - interval '2 seconds');
+
+  update public.commands
+     set status = 'expired',
+         result_message = 'Expired before EA pickup'
+   where ea_id = v_ea.id
+     and status = 'pending'
+     and expires_at < v_now;
+
+  select id, action, payload, created_at, expires_at
+    into v_cmd
+  from public.commands
+  where ea_id = v_ea.id
+    and status = 'pending'
+    and expires_at > v_now
+  order by created_at asc
+  for update skip locked
+  limit 1;
+
+  if not found then
+    return jsonb_build_object('ok', true, 'command', null);
+  end if;
+
+  update public.commands
+     set status = 'sent',
+         sent_at = v_now
+   where id = v_cmd.id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'command', jsonb_build_object(
+      'id', v_cmd.id,
+      'action', v_cmd.action,
+      'payload', v_cmd.payload,
+      'created_at', v_cmd.created_at,
+      'expires_at', v_cmd.expires_at
+    )
+  );
+end;
+$$ language plpgsql security definer set search_path = public;
+
+revoke all on function public.claim_next_command(uuid, text) from public;
+grant execute on function public.claim_next_command(uuid, text) to service_role;
