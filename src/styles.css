@@ -556,7 +556,7 @@ code,
 
 .viewToggle {
   display: inline-grid;
-  grid-template-columns: repeat(4, minmax(0, auto));
+  grid-template-columns: repeat(5, minmax(0, auto));
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--border);
@@ -1314,6 +1314,435 @@ code,
 
 .emptyState.compact {
   min-height: 58px;
+}
+
+.multiPage {
+  display: grid;
+  gap: 14px;
+}
+
+.multiMaster {
+  padding: 18px;
+}
+
+.multiMasterHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.multiMasterHeader h1 {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: 0;
+}
+
+.multiHeaderActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.masterStats {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.masterStats div,
+.accountSnapshot div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.masterStats span,
+.accountSnapshot span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.masterStats strong,
+.accountSnapshot strong {
+  display: block;
+  color: var(--text);
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.masterControls {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.masterControls button {
+  min-height: 58px;
+  min-width: 0;
+  white-space: normal;
+}
+
+.redInlineBtn {
+  color: #ff8181;
+  background: rgba(223, 75, 75, 0.1);
+  border-color: rgba(223, 75, 75, 0.32);
+}
+
+.redInlineBtn:hover:not(:disabled) {
+  background: rgba(223, 75, 75, 0.18);
+  border-color: rgba(223, 75, 75, 0.5);
+}
+
+.bulkResult {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 11px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.bulkResult.sent {
+  border-color: rgba(24, 160, 88, 0.34);
+  background: rgba(24, 160, 88, 0.09);
+  color: #bdf5d8;
+}
+
+.bulkResult.partial,
+.bulkResult.sending {
+  border-color: rgba(201, 140, 24, 0.38);
+  background: rgba(201, 140, 24, 0.1);
+  color: #f2d59b;
+}
+
+.bulkResult.failed {
+  border-color: rgba(223, 75, 75, 0.38);
+  background: rgba(223, 75, 75, 0.1);
+  color: #ffb1b1;
+}
+
+.bulkResult button {
+  width: 30px;
+  min-height: 30px;
+  padding: 0;
+  background: transparent;
+  color: currentColor;
+  border: 1px solid currentColor;
+  opacity: 0.8;
+}
+
+.accountRiskBanner {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(201, 140, 24, 0.34);
+  background: rgba(201, 140, 24, 0.1);
+  color: #f2d59b;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.accountRiskBanner svg {
+  margin-top: 1px;
+  color: var(--warning);
+}
+
+.accountToolbar {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 240px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+}
+
+.accountToolbar select {
+  min-height: 40px;
+}
+
+.accountToolbarNote {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.multiAccountList {
+  display: grid;
+  gap: 12px;
+}
+
+.multiAccountCard {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+
+.multiAccountCard.selected {
+  border-color: rgba(19, 184, 164, 0.42);
+}
+
+.accountCardHeader {
+  display: grid;
+  grid-template-columns: 122px minmax(0, 1fr);
+  align-items: stretch;
+  min-height: 74px;
+}
+
+.accountSelectBox {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.accountSelectBox input {
+  width: 18px;
+  min-height: 18px;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.accountHeaderMain {
+  width: 100%;
+  min-height: 74px;
+  display: grid;
+  grid-template-columns: auto minmax(190px, 0.9fr) minmax(0, 1.4fr) auto;
+  gap: 12px;
+  align-items: center;
+  justify-content: stretch;
+  padding: 12px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  text-align: left;
+}
+
+.accountHeaderMain:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.multiAccountCard.expanded .accountHeaderMain > svg {
+  transform: rotate(180deg);
+}
+
+.accountOnlineDot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.accountOnlineDot.online {
+  background: #2fe09a;
+  box-shadow: 0 0 0 5px rgba(47, 224, 154, 0.12);
+}
+
+.accountOnlineDot.offline {
+  background: #df4b4b;
+  box-shadow: 0 0 0 5px rgba(223, 75, 75, 0.1);
+}
+
+.accountTitleBlock {
+  min-width: 0;
+}
+
+.accountTitleBlock strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountTitleBlock small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountHeaderMetrics {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.accountHeaderMetrics span {
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountCardBody {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.accountSnapshot {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.accountControlsGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 12px;
+}
+
+.accountSubpanel {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.accountSafetyPanel {
+  grid-column: 1 / -1;
+}
+
+.subpanelTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.accountSettingsGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.accountModeToggle {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.accountActionGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.accountActionGrid button {
+  min-height: 40px;
+  min-width: 0;
+  padding: 9px 8px;
+  font-size: 12px;
+  white-space: normal;
+}
+
+.accountLowerGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.accountMiniRows {
+  display: grid;
+  gap: 8px;
+}
+
+.accountMiniRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border-radius: var(--radius);
+  background: var(--input);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.accountMiniRow strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountMiniRow span {
+  white-space: nowrap;
+}
+
+.miniStatus {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--muted);
+}
+
+.miniStatus.done {
+  color: #2fe09a;
+}
+
+.miniStatus.failed {
+  color: #ff8181;
+}
+
+.miniStatus.pending,
+.miniStatus.sent {
+  color: #f2b84d;
+}
+
+.accountCardFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .settingsPage {
@@ -2353,6 +2782,21 @@ code,
   .tierDiagram {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .masterStats,
+  .accountSnapshot {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .masterControls,
+  .accountActionGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .accountControlsGrid,
+  .accountLowerGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 860px) {
@@ -2395,7 +2839,7 @@ code,
   }
 
   .viewToggle {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .hero,
@@ -2421,6 +2865,32 @@ code,
 
   .statisticsGrid {
     gap: 18px;
+  }
+
+  .multiMasterHeader,
+  .accountToolbar,
+  .accountCardHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .multiHeaderActions,
+  .accountToolbarNote {
+    justify-content: flex-start;
+  }
+
+  .accountSelectBox {
+    justify-content: flex-start;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .accountHeaderMain {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .accountHeaderMetrics {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -2467,12 +2937,16 @@ code,
   .rulesControlGrid,
   .rulesInputGrid,
   .ruleStatusGrid,
-  .rulesBars,
-  .tierDiagram,
-  .objectivesGrid,
-  .accountSnapshotGrid,
-  .lossInfoGrid,
-  .statisticsGrid {
+    .rulesBars,
+    .tierDiagram,
+    .objectivesGrid,
+    .accountSnapshotGrid,
+    .lossInfoGrid,
+    .statisticsGrid,
+    .masterStats,
+    .accountSnapshot,
+    .accountSettingsGrid,
+    .accountModeToggle {
     grid-template-columns: 1fr;
   }
 
@@ -2799,6 +3273,62 @@ code,
 
   .historySummary {
     grid-template-columns: 1fr;
+  }
+
+  .multiMaster {
+    padding: 12px;
+  }
+
+  .multiMasterHeader h1 {
+    font-size: 24px;
+  }
+
+  .masterControls {
+    grid-template-columns: 1fr;
+  }
+
+  .masterControls button {
+    min-height: 48px;
+  }
+
+  .bulkResult {
+    grid-template-columns: 1fr auto;
+  }
+
+  .bulkResult span {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .accountToolbar {
+    padding: 10px;
+  }
+
+  .accountHeaderMain {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 9px;
+    padding: 10px;
+  }
+
+  .accountHeaderMetrics {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .accountCardBody {
+    padding: 10px;
+  }
+
+  .accountSubpanel {
+    padding: 12px;
+  }
+
+  .accountActionGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .accountMiniRow {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .copyRow {

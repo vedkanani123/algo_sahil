@@ -29,6 +29,7 @@ supabase link --project-ref YOUR_PROJECT_REF
 supabase secrets set SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 supabase secrets set TELEGRAM_TOKEN_ENCRYPTION_KEY=LONG_RANDOM_SECRET_AT_LEAST_16_CHARS
 supabase functions deploy create-command
+supabase functions deploy create-bulk-command
 supabase functions deploy ea-next-command --no-verify-jwt
 supabase functions deploy ea-ack-command --no-verify-jwt
 supabase functions deploy ea-post-state --no-verify-jwt
@@ -115,6 +116,8 @@ Risk is now money, not percent. If the account currency is USD and the web dashb
 ## How ARM BUY works
 
 Website ARM BUY -> Supabase command row -> EA polls `ea-next-command` -> EA calls `SetArmMode(ARM_BUY)` -> your existing `TryArmedExecution()` waits for a fresh BUY model -> your existing `ExecuteSignal()` opens trade with your risk/SL/TP logic.
+
+For the multi-account controller, `create-bulk-command` creates one verified command row per selected EA. Each EA still receives only its own command and uses its own risk, lot, RR, partials, symbol, VPS, and broker account settings.
 
 ## Test order
 

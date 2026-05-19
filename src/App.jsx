@@ -83,6 +83,7 @@ const TELEGRAM_PREFS = [
 
 const DEFAULT_TELEGRAM_PREFS = TELEGRAM_PREFS.reduce((acc, [key]) => ({ ...acc, [key]: true }), {})
 const LIVE_POLL_MS = 500
+const MULTI_LIVE_POLL_MS = 2000
 const CONTROL_OPTIMISTIC_MS = 12000
 const CONTROL_KEYS = ['partialsOn', 'secondEntryOn']
 
@@ -587,6 +588,62 @@ function mergeCommandRows(rows, row) {
     .slice(0, 12)
 }
 
+function mapRowsBy(rows, key) {
+  const map = {}
+  for (const row of rows || []) {
+    const id = row?.[key]
+    if (id) map[id] = row
+  }
+  return map
+}
+
+function groupCommandsByEa(rows, maxPerEa = 8) {
+  const out = {}
+  for (const row of rows || []) {
+    if (!row?.ea_id) continue
+    const list = out[row.ea_id] || []
+    if (list.length < maxPerEa) list.push(row)
+    out[row.ea_id] = list
+  }
+  return out
+}
+
+function accountUpdatedAt(instance, stateRow) {
+  return stateRow?.updated_at || instance?.last_seen_at || null
+}
+
+function isAccountOnline(instance, stateRow, windowMs = 15000) {
+  const updatedAt = accountUpdatedAt(instance, stateRow)
+  if (!updatedAt) return false
+  const date = new Date(updatedAt)
+  if (Number.isNaN(date.getTime())) return false
+  return Date.now() - date.getTime() < windowMs
+}
+
+function accountSymbol(instance, state) {
+  return state?.symbol || instance?.symbol || 'XAUUSD'
+}
+
+function accountTitle(instance, state) {
+  const login = state?.accountLogin || instance?.account_login
+  return login ? `${instance?.name || 'EA'} #${login}` : instance?.name || 'EA Connection'
+}
+
+function commandLabel(action) {
+  return String(action || '').replaceAll('_', ' ')
+}
+
+async function postCommand(session, eaId, action, payload = {}, clientId = uid()) {
+  const res = await fetch(`${functionsUrl}/create-command`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ ea_id: eaId, action, payload, client_id: clientId })
+  })
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok || !json.ok) throw new Error(json.error || 'Command failed')
+  return json.command || json
+}
+
 function Login() {
   const [mode, setMode] = useState('signin')
   const [email, setEmail] = useState('')
@@ -874,6 +931,7 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
       <div className="topbarActions">
         <div className="viewToggle" role="group" aria-label="Dashboard view">
           <button className={view === 'dashboard' ? 'active' : ''} onClick={() => setView('dashboard')} title="Dashboard"><Activity size={16} /> Dashboard</button>
+          <button className={view === 'accounts' ? 'active' : ''} onClick={() => setView('accounts')} title="All accounts"><WalletCards size={16} /> Accounts</button>
           <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')} title="Trade history"><History size={16} /> Trades</button>
           <button className={view === 'rules' ? 'active' : ''} onClick={() => setView('rules')} title="Funding rules"><ListChecks size={16} /> Rules</button>
           <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')} title="Settings"><Settings2 size={16} /> Settings</button>
@@ -1045,18 +1103,12 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
     const clientId = options.clientId || payload?.request_id || uid()
     if (lock) setBusy(action)
     try {
-      const res = await fetch(`${functionsUrl}/create-command`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ ea_id: selected.id, action, payload, client_id: clientId })
-      })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok || !json.ok) {
-        if (!options.silent) alert(json.error || 'Command failed')
-        return false
-      }
+      const command = await postCommand(session, selected.id, action, payload, clientId)
       reloadCommands?.()
-      return json.command || true
+      return command || true
+    } catch (error) {
+      if (!options.silent) alert(error.message || 'Command failed')
+      return false
     } finally {
       if (lock) setBusy('')
     }
@@ -1324,6 +1376,574 @@ function CommandsLog({ commands }) {
         )) : <div className="emptyState">No commands yet.</div>}
       </div>
     </section>
+  )
+}
+
+function MultiAccountDashboard({ session, instances, onNewEa, onOpenAccount }) {
+  const [statesById, setStatesById] = useState({})
+  const [commandsById, setCommandsById] = useState({})
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [expandedIds, setExpandedIds] = useState(() => new Set())
+  const [filter, setFilter] = useState('all')
+  const [busy, setBusy] = useState('')
+  const [result, setResult] = useState(null)
+  const [lastSyncAt, setLastSyncAt] = useState(null)
+  const pollingRef = useRef(false)
+  const selectionReadyRef = useRef(false)
+  const expansionReadyRef = useRef(false)
+
+  const instanceIds = useMemo(() => instances.map(x => x.id).filter(Boolean), [instances])
+  const instanceIdKey = instanceIds.join(',')
+
+  const accounts = useMemo(() => instances.map(instance => {
+    const stateRow = statesById[instance.id] || null
+    const state = stateRow?.state || {}
+    const online = isAccountOnline(instance, stateRow)
+    return {
+      instance,
+      stateRow,
+      state,
+      online,
+      selected: selectedIds.has(instance.id),
+      expanded: expandedIds.has(instance.id),
+      symbol: accountSymbol(instance, state),
+      title: accountTitle(instance, state),
+      commands: commandsById[instance.id] || []
+    }
+  }), [commandsById, expandedIds, instances, selectedIds, statesById])
+
+  const visibleAccounts = useMemo(() => accounts.filter(account => {
+    if (filter === 'online') return account.online
+    if (filter === 'offline') return !account.online
+    if (filter === 'selected') return account.selected
+    return true
+  }), [accounts, filter])
+
+  const selectedAccounts = useMemo(() => accounts.filter(account => account.selected), [accounts])
+  const selectedOnlineCount = selectedAccounts.filter(account => account.online).length
+  const selectedOfflineCount = Math.max(0, selectedAccounts.length - selectedOnlineCount)
+  const totalEquity = selectedAccounts.reduce((sum, account) => sum + numberValue(account.state.equity, 0), 0)
+  const totalOpenPositions = selectedAccounts.reduce((sum, account) => sum + numberValue(account.state.position?.count, account.state.position?.hasPosition ? 1 : 0), 0)
+  const selectedSymbols = Array.from(new Set(selectedAccounts.map(account => account.symbol).filter(Boolean)))
+  const selectedCurrencies = Array.from(new Set(selectedAccounts.map(account => account.state.currency).filter(Boolean)))
+  const totalEquityText = selectedCurrencies.length <= 1 ? moneyPlain(totalEquity, selectedCurrencies[0] || '') : 'Mixed currency'
+  const duplicateAccountKeys = useMemo(() => {
+    const counts = new Map()
+    for (const account of accounts) {
+      const login = account.state.accountLogin || account.instance.account_login
+      const server = account.state.accountServer || 'server'
+      if (!login) continue
+      const key = `${server}:${login}`
+      counts.set(key, (counts.get(key) || 0) + 1)
+    }
+    return Array.from(counts.entries()).filter(([, count]) => count > 1).map(([key]) => key)
+  }, [accounts])
+  const visibleIds = visibleAccounts.map(account => account.instance.id)
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id))
+
+  const loadMultiData = useCallback(async () => {
+    if (!instanceIds.length) return
+    const ids = instanceIds
+    const [statesRes, commandsRes] = await Promise.all([
+      supabase.from('ea_states').select('*').in('ea_id', ids),
+      supabase.from('commands').select('*').in('ea_id', ids).order('created_at', { ascending: false }).limit(Math.min(Math.max(ids.length * 8, 24), 200))
+    ])
+    if (!statesRes.error) setStatesById(mapRowsBy(statesRes.data || [], 'ea_id'))
+    if (!commandsRes.error) setCommandsById(groupCommandsByEa(commandsRes.data || []))
+    setLastSyncAt(new Date())
+  }, [instanceIdKey])
+
+  useEffect(() => {
+    const validIds = new Set(instanceIds)
+    setSelectedIds(current => {
+      const next = new Set([...current].filter(id => validIds.has(id)))
+      if (!selectionReadyRef.current) {
+        instances.forEach(instance => next.add(instance.id))
+        selectionReadyRef.current = true
+      }
+      return next
+    })
+    setExpandedIds(current => {
+      const next = new Set([...current].filter(id => validIds.has(id)))
+      if (!expansionReadyRef.current) {
+        instances.slice(0, 2).forEach(instance => next.add(instance.id))
+        expansionReadyRef.current = true
+      }
+      return next
+    })
+  }, [instanceIdKey, instances])
+
+  useEffect(() => { loadMultiData() }, [loadMultiData])
+
+  useEffect(() => {
+    if (!instanceIds.length) return undefined
+    let cancelled = false
+    async function pollLiveData() {
+      if (pollingRef.current) return
+      pollingRef.current = true
+      try {
+        await loadMultiData()
+      } finally {
+        pollingRef.current = false
+      }
+    }
+    const interval = window.setInterval(() => {
+      if (!cancelled) pollLiveData()
+    }, MULTI_LIVE_POLL_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [instanceIdKey, instanceIds.length, loadMultiData])
+
+  useEffect(() => {
+    if (!session?.user?.id) return undefined
+    const ch = supabase.channel(`tcx-multi-${session.user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ea_states', filter: `user_id=eq.${session.user.id}` }, payload => {
+        if (payload.new?.ea_id) {
+          setStatesById(current => ({ ...current, [payload.new.ea_id]: payload.new }))
+          setLastSyncAt(new Date())
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'commands', filter: `user_id=eq.${session.user.id}` }, payload => {
+        if (payload.new?.ea_id) {
+          setCommandsById(current => ({
+            ...current,
+            [payload.new.ea_id]: mergeCommandRows(current[payload.new.ea_id] || [], payload.new)
+          }))
+        } else {
+          loadMultiData()
+        }
+      })
+      .subscribe()
+    return () => supabase.removeChannel(ch)
+  }, [loadMultiData, session?.user?.id])
+
+  function toggleSelected(id) {
+    setSelectedIds(current => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleExpanded(id) {
+    setExpandedIds(current => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAllVisible() {
+    setSelectedIds(current => {
+      const next = new Set(current)
+      if (allVisibleSelected) visibleIds.forEach(id => next.delete(id))
+      else visibleIds.forEach(id => next.add(id))
+      return next
+    })
+  }
+
+  async function postBulkCommand(action, payload = {}) {
+    const selectedEaIds = selectedAccounts.map(account => account.instance.id)
+    const bulkClientId = uid()
+    const res = await fetch(`${functionsUrl}/create-bulk-command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ ea_ids: selectedEaIds, action, payload, client_id: bulkClientId })
+    })
+    const json = await res.json().catch(() => ({}))
+    if (res.status === 404) throw new Error('BULK_FUNCTION_NOT_DEPLOYED')
+    if (!res.ok || !json.ok) throw new Error(json.error || 'Bulk command failed')
+    return {
+      ok: true,
+      sent: json.commands?.length || 0,
+      failed: 0,
+      details: json.commands || []
+    }
+  }
+
+  async function postFallbackCommands(action, payload = {}) {
+    const rows = await Promise.allSettled(selectedAccounts.map(account =>
+      postCommand(session, account.instance.id, action, payload, `${uid()}:${account.instance.id}`)
+    ))
+    const sent = rows.filter(row => row.status === 'fulfilled').length
+    const failed = rows.length - sent
+    return { ok: failed === 0, sent, failed, details: rows }
+  }
+
+  async function sendMasterCommand(action, payload = {}) {
+    if (!selectedAccounts.length) return alert('Select at least one account first.')
+    if (busy) return
+    if (selectedOfflineCount > 0 && !window.confirm(`${selectedOfflineCount} selected account(s) are offline. Command may expire before pickup. Send anyway?`)) return
+    if ((action === ACTIONS.ARM_BUY || action === ACTIONS.ARM_SELL || action === ACTIONS.AUTO_ARM) && selectedSymbols.length > 1) {
+      if (!window.confirm(`Selected accounts use ${selectedSymbols.length} symbols: ${selectedSymbols.join(', ')}. Send ${commandLabel(action)} to each account on its own chart?`)) return
+    }
+    if (action === ACTIONS.CLOSE_ALL && !window.confirm(`Close all EA positions on ${selectedAccounts.length} selected account(s)?`)) return
+
+    setBusy(action)
+    setResult({ action, status: 'sending', sent: 0, failed: 0 })
+    try {
+      let summary
+      try {
+        summary = await postBulkCommand(action, payload)
+      } catch (error) {
+        if (error.message !== 'BULK_FUNCTION_NOT_DEPLOYED') throw error
+        summary = await postFallbackCommands(action, payload)
+      }
+      setResult({ action, status: summary.failed ? 'partial' : 'sent', ...summary })
+      await loadMultiData()
+    } catch (error) {
+      setResult({ action, status: 'failed', sent: 0, failed: selectedAccounts.length, message: error.message || 'Command failed' })
+      alert(error.message || 'Command failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <section className="multiPage">
+      <section className="multiMaster glass">
+        <div className="multiMasterHeader">
+          <div>
+            <p className="sectionEyebrow">Multi account execution</p>
+            <h1>Account Controller</h1>
+          </div>
+          <div className="multiHeaderActions">
+            <button className="ghostBtn iconTextBtn" onClick={loadMultiData} title="Refresh accounts"><RefreshCw size={16} /> Refresh</button>
+            <button className="primaryBtn iconTextBtn" onClick={onNewEa} title="New EA"><Plus size={16} /> New EA</button>
+          </div>
+        </div>
+
+        <div className="masterStats">
+          <div><span>Selected</span><strong>{selectedAccounts.length}/{accounts.length}</strong></div>
+          <div><span>Online</span><strong>{selectedOnlineCount}</strong></div>
+          <div><span>Offline</span><strong>{selectedOfflineCount}</strong></div>
+          <div><span>Open Positions</span><strong>{totalOpenPositions}</strong></div>
+          <div><span>Total Equity</span><strong>{totalEquityText}</strong></div>
+          <div><span>Last Sync</span><strong>{formatClock(lastSyncAt)}</strong></div>
+        </div>
+
+        <div className="masterControls">
+          <button className="buyBtn" disabled={busy === ACTIONS.ARM_BUY} onClick={() => sendMasterCommand(ACTIONS.ARM_BUY)}><ArrowUpCircle /> ARM BUY</button>
+          <button className="sellBtn" disabled={busy === ACTIONS.ARM_SELL} onClick={() => sendMasterCommand(ACTIONS.ARM_SELL)}><ArrowDownCircle /> ARM SELL</button>
+          <button className="ghostBtn" disabled={busy === ACTIONS.AUTO_ARM} onClick={() => sendMasterCommand(ACTIONS.AUTO_ARM)}><CircleDot /> AUTO ARM</button>
+          <button className="ghostBtn" disabled={busy === ACTIONS.CANCEL} onClick={() => sendMasterCommand(ACTIONS.CANCEL)}><PauseCircle /> CANCEL</button>
+          <button className="ghostBtn" disabled={busy === ACTIONS.BREAK_EVEN} onClick={() => sendMasterCommand(ACTIONS.BREAK_EVEN)}><Shield /> BREAK EVEN</button>
+          <button className="ghostBtn redInlineBtn" disabled={busy === ACTIONS.CLOSE_ALL} onClick={() => sendMasterCommand(ACTIONS.CLOSE_ALL)}><XCircle /> CLOSE ALL</button>
+        </div>
+
+        {result && (
+          <div className={`bulkResult ${result.status}`}>
+            <strong>{commandLabel(result.action)}</strong>
+            <span>{result.status === 'sending' ? 'Sending commands...' : result.status === 'failed' ? result.message || 'Command failed' : `${result.sent} sent${result.failed ? `, ${result.failed} failed` : ''}`}</span>
+            <button type="button" onClick={() => setResult(null)} title="Clear result"><X size={15} /></button>
+          </div>
+        )}
+
+        {(duplicateAccountKeys.length > 0 || selectedSymbols.length > 1 || selectedCurrencies.length > 1) && (
+          <div className="accountRiskBanner">
+            <AlertTriangle size={17} />
+            <span>
+              {duplicateAccountKeys.length > 0 ? `${duplicateAccountKeys.length} duplicate MT5 login/server connection(s) detected. ` : ''}
+              {selectedSymbols.length > 1 ? `Selected accounts have mixed symbols: ${selectedSymbols.join(', ')}. ` : ''}
+              {selectedCurrencies.length > 1 ? 'Selected accounts have mixed currencies. ' : ''}
+            </span>
+          </div>
+        )}
+      </section>
+
+      <div className="accountToolbar glass">
+        <button className="ghostBtn compactBtn" onClick={toggleAllVisible}>{allVisibleSelected ? 'Unselect Visible' : 'Select Visible'}</button>
+        <select value={filter} onChange={e => setFilter(e.target.value)} aria-label="Account filter">
+          <option value="all">All accounts</option>
+          <option value="selected">Selected accounts</option>
+          <option value="online">Online only</option>
+          <option value="offline">Offline only</option>
+        </select>
+        <div className="accountToolbarNote"><Lock size={14} /> Master buttons send only to selected accounts.</div>
+      </div>
+
+      <div className="multiAccountList">
+        {visibleAccounts.length ? visibleAccounts.map(account => (
+          <MultiAccountCard
+            key={account.instance.id}
+            session={session}
+            account={account}
+            onToggleSelected={() => toggleSelected(account.instance.id)}
+            onToggleExpanded={() => toggleExpanded(account.instance.id)}
+            onOpenSingle={() => onOpenAccount(account.instance.id)}
+            onCommandDone={loadMultiData}
+          />
+        )) : <div className="emptyState glass">No accounts match this filter.</div>}
+      </div>
+    </section>
+  )
+}
+
+function MultiAccountCard({ session, account, onToggleSelected, onToggleExpanded, onOpenSingle, onCommandDone }) {
+  const { instance, stateRow, state, online, selected, expanded, commands, symbol, title } = account
+  const currency = state.currency || ''
+  const positionCount = numberValue(state.position?.count, state.position?.hasPosition ? 1 : 0)
+  const updatedAt = accountUpdatedAt(instance, stateRow)
+
+  return (
+    <article className={`multiAccountCard ${expanded ? 'expanded' : ''} ${selected ? 'selected' : ''}`}>
+      <div className="accountCardHeader">
+        <label className="accountSelectBox">
+          <input type="checkbox" checked={selected} onChange={onToggleSelected} />
+          <span>{selected ? 'Selected' : 'Select'}</span>
+        </label>
+
+        <button type="button" className="accountHeaderMain" onClick={onToggleExpanded} aria-expanded={expanded}>
+          <span className={`accountOnlineDot ${online ? 'online' : 'offline'}`} />
+          <span className="accountTitleBlock">
+            <strong>{title}</strong>
+            <small>{state.accountCompany || instance.account_login || 'Waiting for MT5 account'} {state.accountServer ? `- ${state.accountServer}` : ''}</small>
+          </span>
+          <span className="accountHeaderMetrics">
+            <span>{symbol}</span>
+            <span>{moneyPlain(state.equity, currency)}</span>
+            <span>Risk {moneyPlain(state.risk, currency)}</span>
+            <span>{state.status || 'Waiting'}</span>
+          </span>
+          <ChevronDown size={18} />
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="accountCardBody">
+          <div className="accountSnapshot">
+            <div><span>Status</span><strong className={online ? 'pos' : 'neg'}>{online ? 'Online' : 'Offline'}</strong></div>
+            <div><span>Last Seen</span><strong>{formatClock(updatedAt)}</strong></div>
+            <div><span>Balance</span><strong>{moneyPlain(state.balance, currency)}</strong></div>
+            <div><span>Open P/L</span><strong className={clsPL(state.openPL)}>{money(state.openPL, currency)}</strong></div>
+            <div><span>Positions</span><strong>{positionCount}</strong></div>
+            <div><span>Arm</span><strong>{state.arm || 'OFF'}</strong></div>
+          </div>
+
+          <AccountQuickControls session={session} instance={instance} stateRow={stateRow} onCommandDone={onCommandDone} />
+
+          <div className="accountLowerGrid">
+            <AccountPositionsCompact state={state} />
+            <AccountCommandsCompact commands={commands} />
+          </div>
+
+          <div className="accountCardFooter">
+            <button className="ghostBtn compactBtn" onClick={onOpenSingle}><Activity size={15} /> Open Single Dashboard</button>
+            <span>EA ID is private to this account connection.</span>
+          </div>
+        </div>
+      )}
+    </article>
+  )
+}
+
+function AccountQuickControls({ session, instance, stateRow, onCommandDone }) {
+  const s = stateRow?.state || {}
+  const [busy, setBusy] = useState('')
+  const [risk, setRisk] = useState({ lot: '0.01', risk: '100.00', rr: '3.0' })
+  const [pc, setPc] = useState({ pc1: '30', pc2: '30', pc3: '40' })
+  const [riskDirty, setRiskDirty] = useState(false)
+  const [pcDirty, setPcDirty] = useState(false)
+  const [pendingRisk, setPendingRisk] = useState(null)
+  const [pendingPc, setPendingPc] = useState(null)
+  const [optimisticControls, setOptimisticControls] = useState({})
+  const currency = s.currency || 'Money'
+  const controlState = {
+    partialsOn: optimisticControlValue(optimisticControls, 'partialsOn', s.partialsOn),
+    secondEntryOn: optimisticControlValue(optimisticControls, 'secondEntryOn', s.secondEntryOn)
+  }
+  const controlStateRef = useRef(controlState)
+  controlStateRef.current = controlState
+
+  useEffect(() => {
+    if (pendingRisk && nearNumber(s.lot, pendingRisk.lot) && nearNumber(s.risk, pendingRisk.risk, 0.01) && nearNumber(s.rr, pendingRisk.rr, 0.01)) {
+      setPendingRisk(null)
+      setRiskDirty(false)
+    }
+    if (!riskDirty && !pendingRisk) {
+      setRisk(r => ({ lot: String(s.lot ?? r.lot), risk: String(s.risk ?? r.risk), rr: String(s.rr ?? r.rr) }))
+    }
+    if (pendingPc && nearNumber(s.pc1, pendingPc.pc1, 0.1) && nearNumber(s.pc2, pendingPc.pc2, 0.1) && nearNumber(s.pc3, pendingPc.pc3, 0.1)) {
+      setPendingPc(null)
+      setPcDirty(false)
+    }
+    if (!pcDirty && !pendingPc) {
+      setPc(p => ({ pc1: String(s.pc1 ?? p.pc1), pc2: String(s.pc2 ?? p.pc2), pc3: String(s.pc3 ?? p.pc3) }))
+    }
+    setOptimisticControls(prev => {
+      const next = pruneOptimisticControls(prev, s)
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next
+    })
+  }, [stateRow?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, s.partialsOn, s.secondEntryOn, riskDirty, pcDirty, pendingRisk, pendingPc])
+
+  async function cmd(action, payload = {}, options = {}) {
+    if (!instance?.id) return false
+    const lock = options.lock !== false
+    const clientId = options.clientId || payload?.request_id || uid()
+    if (lock) setBusy(action)
+    try {
+      await postCommand(session, instance.id, action, payload, clientId)
+      onCommandDone?.()
+      return true
+    } catch (error) {
+      if (!options.silent) alert(error.message || 'Command failed')
+      return false
+    } finally {
+      if (lock) setBusy('')
+    }
+  }
+
+  function updateRiskField(key, value) {
+    setRisk(r => ({ ...r, [key]: value }))
+    setRiskDirty(true)
+  }
+
+  function updatePcField(key, value) {
+    setPc(p => ({ ...p, [key]: value }))
+    setPcDirty(true)
+  }
+
+  function stepRiskField(key, direction) {
+    const steps = { lot: 0.01, risk: 1, rr: 0.1 }
+    const decimals = { lot: 2, risk: 2, rr: 1 }
+    const min = { lot: 0.01, risk: 0.01, rr: 0.1 }
+    const max = { lot: 100, risk: 100000000, rr: 20 }
+    const next = clampNumber((Number(risk[key]) || 0) + direction * steps[key], min[key], max[key])
+    updateRiskField(key, next.toFixed(decimals[key]))
+  }
+
+  function stepPcField(key, direction) {
+    const next = clampNumber((Number(pc[key]) || 0) + direction, 0, 100)
+    updatePcField(key, next.toFixed(0))
+  }
+
+  async function sendRiskSettings() {
+    const lot = Number(risk.lot)
+    const riskAmount = Number(risk.risk)
+    const rr = Number(risk.rr)
+    if (!Number.isFinite(lot) || lot <= 0) return alert('Lot must be greater than zero')
+    if (!Number.isFinite(riskAmount) || riskAmount <= 0) return alert('Risk amount must be greater than zero')
+    if (!Number.isFinite(rr) || rr <= 0) return alert('RR must be greater than zero')
+    const ok = await cmd(ACTIONS.SET_RISK, { lot, risk: riskAmount, rr })
+    if (ok) setPendingRisk({ lot, risk: riskAmount, rr })
+  }
+
+  async function sendPartialSettings() {
+    const next = {
+      pc1: clampNumber(pc.pc1, 0, 100),
+      pc2: clampNumber(pc.pc2, 0, 100),
+      pc3: clampNumber(pc.pc3, 0, 100),
+      partialsOn: controlState.partialsOn
+    }
+    const ok = await cmd(ACTIONS.SET_PARTIALS, next)
+    if (ok) setPendingPc(next)
+  }
+
+  async function setBooleanControl(key, value) {
+    const requestId = uid()
+    const now = Date.now()
+    controlStateRef.current = { ...controlStateRef.current, [key]: value }
+    setOptimisticControls(prev => ({
+      ...pruneOptimisticControls(prev, s, now),
+      [key]: { value, at: now, requestId }
+    }))
+    const ok = await cmd(ACTIONS.SET_PARTIALS, { [key]: value, request_id: requestId }, { lock: false, clientId: requestId })
+    if (!ok) {
+      setOptimisticControls(prev => {
+        if (prev[key]?.requestId !== requestId) return prev
+        const copy = { ...prev }
+        delete copy[key]
+        return copy
+      })
+    }
+  }
+
+  return (
+    <div className="accountControlsGrid">
+      <div className="accountSubpanel">
+        <div className="subpanelTitle"><Settings2 size={16} /> Risk Settings</div>
+        <div className="settingsGrid accountSettingsGrid">
+          <StepperInput label="Lot" value={risk.lot} onChange={value => updateRiskField('lot', value)} onStep={direction => stepRiskField('lot', direction)} stepLabel="+/- 0.01" />
+          <StepperInput label={`Risk ${currency}`} value={risk.risk} onChange={value => updateRiskField('risk', value)} onStep={direction => stepRiskField('risk', direction)} stepLabel="+/- 1" />
+          <StepperInput label="RR" value={risk.rr} onChange={value => updateRiskField('rr', value)} onStep={direction => stepRiskField('rr', direction)} stepLabel="+/- 0.1" />
+        </div>
+        <button className="primaryBtn fullBtn" onClick={sendRiskSettings} disabled={busy === ACTIONS.SET_RISK}>Send Risk To This Account</button>
+      </div>
+
+      <div className="accountSubpanel">
+        <div className="subpanelTitle"><SlidersHorizontal size={16} /> Mode & Partials</div>
+        <div className="modeToggle accountModeToggle" role="group" aria-label="Account trade controls">
+          <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'safe' })} className={!s.advanced ? 'active' : ''} disabled={busy === ACTIONS.SET_MODE}>Safe</button>
+          <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'advanced' })} className={s.advanced ? 'active' : ''} disabled={busy === ACTIONS.SET_MODE}>Advanced</button>
+          <button onClick={() => setBooleanControl('partialsOn', !controlStateRef.current.partialsOn)} className={controlState.partialsOn ? 'active successToggle' : ''}>Partials {controlState.partialsOn ? 'ON' : 'OFF'}</button>
+          <button onClick={() => setBooleanControl('secondEntryOn', !controlStateRef.current.secondEntryOn)} className={controlState.secondEntryOn ? 'active successToggle' : ''}>2nd {controlState.secondEntryOn ? 'ON' : 'OFF'}</button>
+        </div>
+        <div className="settingsGrid accountSettingsGrid">
+          <StepperInput label="PC1 %" value={pc.pc1} onChange={value => updatePcField('pc1', value)} onStep={direction => stepPcField('pc1', direction)} stepLabel="+/- 1" />
+          <StepperInput label="PC2 %" value={pc.pc2} onChange={value => updatePcField('pc2', value)} onStep={direction => stepPcField('pc2', direction)} stepLabel="+/- 1" />
+          <StepperInput label="PC3 %" value={pc.pc3} onChange={value => updatePcField('pc3', value)} onStep={direction => stepPcField('pc3', direction)} stepLabel="+/- 1" />
+        </div>
+        <button className="ghostBtn fullBtn" onClick={sendPartialSettings} disabled={busy === ACTIONS.SET_PARTIALS}>Send Partials To This Account</button>
+      </div>
+
+      <div className="accountSubpanel accountSafetyPanel">
+        <div className="subpanelTitle"><Shield size={16} /> Account Actions</div>
+        <div className="accountActionGrid">
+          <button className="ghostBtn" onClick={() => cmd(ACTIONS.PING)} disabled={busy === ACTIONS.PING}><Wifi size={15} /> Ping</button>
+          <button className="ghostBtn" onClick={() => cmd(ACTIONS.CANCEL)} disabled={busy === ACTIONS.CANCEL}><PauseCircle size={15} /> Cancel</button>
+          <button className="ghostBtn" onClick={() => cmd(ACTIONS.CLOSE_50)} disabled={busy === ACTIONS.CLOSE_50}><SlidersHorizontal size={15} /> Close 50%</button>
+          <button className="ghostBtn" onClick={() => cmd(ACTIONS.BREAK_EVEN)} disabled={busy === ACTIONS.BREAK_EVEN}><Shield size={15} /> BE</button>
+          <button className="ghostBtn" onClick={() => cmd(ACTIONS.SET_PARTIALS, { firstBreakEven: true }, { lock: false })}><Shield size={15} /> 1st BE</button>
+          <button className="ghostBtn redInlineBtn" onClick={() => window.confirm(`Close all EA positions on ${instance.name}?`) && cmd(ACTIONS.CLOSE_ALL)} disabled={busy === ACTIONS.CLOSE_ALL}><XCircle size={15} /> Close All</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AccountPositionsCompact({ state }) {
+  const positions = Array.isArray(state.position?.positions) && state.position.positions.length
+    ? state.position.positions
+    : state.position?.hasPosition ? [state.position] : []
+  return (
+    <div className="accountSubpanel">
+      <div className="subpanelTitle"><Gauge size={16} /> Positions</div>
+      {positions.length ? (
+        <div className="accountMiniRows">
+          {positions.slice(0, 4).map((pos, index) => (
+            <div className="accountMiniRow" key={pos.ticket || index}>
+              <strong className={pos.type === 'BUY' ? 'pos' : 'neg'}>{pos.type || '--'}</strong>
+              <span>{pos.volume || '--'} lot</span>
+              <span>{n(pos.rr)}R</span>
+              <span className={clsPL(pos.profit)}>{money(pos.profit, state.currency)}</span>
+            </div>
+          ))}
+        </div>
+      ) : <div className="emptyState compact">No open position.</div>}
+    </div>
+  )
+}
+
+function AccountCommandsCompact({ commands }) {
+  return (
+    <div className="accountSubpanel">
+      <div className="subpanelTitle"><KeyRound size={16} /> Recent Commands</div>
+      {commands.length ? (
+        <div className="accountMiniRows">
+          {commands.slice(0, 5).map(command => (
+            <div className="accountMiniRow" key={command.id}>
+              <strong>{commandLabel(command.action)}</strong>
+              <span className={`miniStatus ${command.status}`}>{command.status}</span>
+              <span>{formatClock(command.created_at)}</span>
+            </div>
+          ))}
+        </div>
+      ) : <div className="emptyState compact">No commands yet.</div>}
+    </div>
   )
 }
 
@@ -2300,6 +2920,13 @@ function Dashboard({ session }) {
       />
       {view === 'settings' ? (
         <TelegramSettingsPage session={session} />
+      ) : view === 'accounts' ? (
+        <MultiAccountDashboard
+          session={session}
+          instances={instances}
+          onNewEa={() => setShowSetup(true)}
+          onOpenAccount={(id) => { setSelectedId(id); setView('dashboard') }}
+        />
       ) : view === 'history' ? (
         <TradeHistoryPage state={state} />
       ) : view === 'rules' ? (
