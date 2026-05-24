@@ -109,7 +109,11 @@ create index if not exists idx_commands_pending_fast on public.commands(ea_id, c
 create index if not exists idx_commands_pending_expiry on public.commands(ea_id, expires_at) where status = 'pending';
 create unique index if not exists idx_commands_ea_client_id_unique on public.commands(ea_id, client_id) where client_id is not null;
 create index if not exists idx_commands_user_created on public.commands(user_id, created_at desc);
+create index if not exists idx_audit_logs_user_id on public.audit_logs(user_id);
+create index if not exists idx_audit_logs_ea_id on public.audit_logs(ea_id);
+create index if not exists idx_ea_states_user_id on public.ea_states(user_id);
 create index if not exists idx_notification_events_user_created on public.notification_events(user_id, created_at desc);
+create index if not exists idx_notification_events_ea_id on public.notification_events(ea_id);
 create index if not exists idx_telegram_ea_status_user_id on public.telegram_ea_status(user_id);
 
 alter table public.profiles enable row level security;
@@ -122,31 +126,181 @@ alter table public.notification_events enable row level security;
 alter table public.telegram_ea_status enable row level security;
 
 drop policy if exists profiles_own on public.profiles;
-create policy profiles_own on public.profiles for all using (id = auth.uid()) with check (id = auth.uid());
+create policy profiles_own on public.profiles for all to authenticated using (id = (select auth.uid())) with check (id = (select auth.uid()));
 
 drop policy if exists ea_instances_own_select on public.ea_instances;
-create policy ea_instances_own_select on public.ea_instances for select using (user_id = auth.uid());
+create policy ea_instances_own_select on public.ea_instances for select to authenticated using (user_id = (select auth.uid()));
 drop policy if exists ea_instances_own_insert on public.ea_instances;
-create policy ea_instances_own_insert on public.ea_instances for insert with check (user_id = auth.uid());
+create policy ea_instances_own_insert on public.ea_instances for insert to authenticated with check (user_id = (select auth.uid()));
 drop policy if exists ea_instances_own_update on public.ea_instances;
-create policy ea_instances_own_update on public.ea_instances for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy ea_instances_own_update on public.ea_instances for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 drop policy if exists ea_instances_own_delete on public.ea_instances;
-create policy ea_instances_own_delete on public.ea_instances for delete using (user_id = auth.uid());
+create policy ea_instances_own_delete on public.ea_instances for delete to authenticated using (user_id = (select auth.uid()));
 
 drop policy if exists ea_states_own_select on public.ea_states;
-create policy ea_states_own_select on public.ea_states for select using (user_id = auth.uid());
+create policy ea_states_own_select on public.ea_states for select to authenticated using (user_id = (select auth.uid()));
 
 drop policy if exists commands_own_select on public.commands;
-create policy commands_own_select on public.commands for select using (user_id = auth.uid());
+create policy commands_own_select on public.commands for select to authenticated using (user_id = (select auth.uid()));
+drop policy if exists commands_own_insert on public.commands;
+create policy commands_own_insert on public.commands for insert to authenticated with check (user_id = (select auth.uid()));
 
 drop policy if exists audit_own_select on public.audit_logs;
-create policy audit_own_select on public.audit_logs for select using (user_id = auth.uid());
+create policy audit_own_select on public.audit_logs for select to authenticated using (user_id = (select auth.uid()));
+drop policy if exists audit_own_insert on public.audit_logs;
+create policy audit_own_insert on public.audit_logs for insert to authenticated with check (user_id = (select auth.uid()));
+
+drop policy if exists telegram_settings_own_select on public.telegram_settings;
+create policy telegram_settings_own_select on public.telegram_settings for select to authenticated using (user_id = (select auth.uid()));
+drop policy if exists telegram_settings_own_update on public.telegram_settings;
+create policy telegram_settings_own_update on public.telegram_settings for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+drop policy if exists telegram_settings_own_delete on public.telegram_settings;
+create policy telegram_settings_own_delete on public.telegram_settings for delete to authenticated using (user_id = (select auth.uid()));
 
 drop policy if exists telegram_events_own_select on public.notification_events;
-create policy telegram_events_own_select on public.notification_events for select using (user_id = auth.uid());
+create policy telegram_events_own_select on public.notification_events for select to authenticated using (user_id = (select auth.uid()));
 
 drop policy if exists telegram_ea_status_own_select on public.telegram_ea_status;
-create policy telegram_ea_status_own_select on public.telegram_ea_status for select using (user_id = auth.uid());
+create policy telegram_ea_status_own_select on public.telegram_ea_status for select to authenticated using (user_id = (select auth.uid()));
+
+-- The MT5 EA calls tcx_ea_sync with the public anon key. These policies keep
+-- direct table access closed unless the RPC sets the EA id/token hash for the
+-- current transaction.
+grant select, update on public.ea_instances to anon;
+grant select, insert, update on public.ea_states to anon;
+grant select, update on public.commands to anon;
+
+create or replace function public.tcx_rpc_ea_id()
+returns uuid as $$
+  select nullif(current_setting('tcx.ea_id', true), '')::uuid;
+$$ language sql stable set search_path = public;
+
+create or replace function public.tcx_rpc_ea_token_hash()
+returns text as $$
+  select nullif(current_setting('tcx.ea_token_hash', true), '');
+$$ language sql stable set search_path = public;
+
+revoke all on function public.tcx_rpc_ea_id() from public;
+revoke all on function public.tcx_rpc_ea_token_hash() from public;
+grant execute on function public.tcx_rpc_ea_id() to anon, authenticated, service_role;
+grant execute on function public.tcx_rpc_ea_token_hash() to anon, authenticated, service_role;
+
+drop policy if exists ea_instances_ea_rpc_select on public.ea_instances;
+create policy ea_instances_ea_rpc_select on public.ea_instances
+for select to anon
+using (
+  id = (select public.tcx_rpc_ea_id())
+  and enabled = true
+  and token_hash = (select public.tcx_rpc_ea_token_hash())
+);
+
+drop policy if exists ea_instances_ea_rpc_update on public.ea_instances;
+create policy ea_instances_ea_rpc_update on public.ea_instances
+for update to anon
+using (
+  id = (select public.tcx_rpc_ea_id())
+  and enabled = true
+  and token_hash = (select public.tcx_rpc_ea_token_hash())
+)
+with check (
+  id = (select public.tcx_rpc_ea_id())
+  and enabled = true
+  and token_hash = (select public.tcx_rpc_ea_token_hash())
+);
+
+drop policy if exists ea_states_ea_rpc_select on public.ea_states;
+create policy ea_states_ea_rpc_select on public.ea_states
+for select to anon
+using (
+  ea_id = (select public.tcx_rpc_ea_id())
+  and exists (
+    select 1
+    from public.ea_instances ea
+    where ea.id = ea_states.ea_id
+      and ea.user_id = ea_states.user_id
+      and ea.enabled = true
+      and ea.token_hash = (select public.tcx_rpc_ea_token_hash())
+  )
+);
+
+drop policy if exists ea_states_ea_rpc_insert on public.ea_states;
+create policy ea_states_ea_rpc_insert on public.ea_states
+for insert to anon
+with check (
+  ea_id = (select public.tcx_rpc_ea_id())
+  and exists (
+    select 1
+    from public.ea_instances ea
+    where ea.id = ea_states.ea_id
+      and ea.user_id = ea_states.user_id
+      and ea.enabled = true
+      and ea.token_hash = (select public.tcx_rpc_ea_token_hash())
+  )
+);
+
+drop policy if exists ea_states_ea_rpc_update on public.ea_states;
+create policy ea_states_ea_rpc_update on public.ea_states
+for update to anon
+using (
+  ea_id = (select public.tcx_rpc_ea_id())
+  and exists (
+    select 1
+    from public.ea_instances ea
+    where ea.id = ea_states.ea_id
+      and ea.user_id = ea_states.user_id
+      and ea.enabled = true
+      and ea.token_hash = (select public.tcx_rpc_ea_token_hash())
+  )
+)
+with check (
+  ea_id = (select public.tcx_rpc_ea_id())
+  and exists (
+    select 1
+    from public.ea_instances ea
+    where ea.id = ea_states.ea_id
+      and ea.user_id = ea_states.user_id
+      and ea.enabled = true
+      and ea.token_hash = (select public.tcx_rpc_ea_token_hash())
+  )
+);
+
+drop policy if exists commands_ea_rpc_select on public.commands;
+create policy commands_ea_rpc_select on public.commands
+for select to anon
+using (
+  ea_id = (select public.tcx_rpc_ea_id())
+  and exists (
+    select 1
+    from public.ea_instances ea
+    where ea.id = commands.ea_id
+      and ea.enabled = true
+      and ea.token_hash = (select public.tcx_rpc_ea_token_hash())
+  )
+);
+
+drop policy if exists commands_ea_rpc_update on public.commands;
+create policy commands_ea_rpc_update on public.commands
+for update to anon
+using (
+  ea_id = (select public.tcx_rpc_ea_id())
+  and exists (
+    select 1
+    from public.ea_instances ea
+    where ea.id = commands.ea_id
+      and ea.enabled = true
+      and ea.token_hash = (select public.tcx_rpc_ea_token_hash())
+  )
+)
+with check (
+  ea_id = (select public.tcx_rpc_ea_id())
+  and exists (
+    select 1
+    from public.ea_instances ea
+    where ea.id = commands.ea_id
+      and ea.enabled = true
+      and ea.token_hash = (select public.tcx_rpc_ea_token_hash())
+  )
+);
 
 create or replace function public.handle_new_user()
 returns trigger as $$
@@ -156,7 +310,11 @@ begin
   on conflict (id) do nothing;
   return new;
 end;
-$$ language plpgsql security definer;
+$$ language plpgsql security definer set search_path = public;
+
+revoke all on function public.handle_new_user() from public;
+revoke all on function public.handle_new_user() from anon;
+revoke all on function public.handle_new_user() from authenticated;
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
@@ -227,3 +385,437 @@ $$ language plpgsql security definer set search_path = public;
 
 revoke all on function public.claim_next_command(uuid, text) from public;
 grant execute on function public.claim_next_command(uuid, text) to service_role;
+
+alter table public.ea_states
+  add column if not exists state_hash text;
+
+create or replace function public.tcx_allowed_command(p_action text)
+returns boolean as $$
+  select upper(coalesce(p_action, '')) = any (array[
+    'ARM_BUY',
+    'ARM_SELL',
+    'AUTO_ARM',
+    'CANCEL',
+    'CLOSE_50',
+    'BREAK_EVEN',
+    'FIRST_BE_EXIT',
+    'FIRST_BREAK_EVEN',
+    'CLOSE_ALL',
+    'TOGGLE_PARTIALS',
+    'TOGGLE_SECOND_ENTRY',
+    'SET_MODE',
+    'SET_RISK',
+    'SET_PARTIALS',
+    'PING'
+  ]::text[]);
+$$ language sql immutable set search_path = public;
+
+revoke all on function public.tcx_allowed_command(text) from public;
+grant execute on function public.tcx_allowed_command(text) to anon, authenticated, service_role;
+
+create or replace function public.tcx_create_command(
+  p_ea_id uuid,
+  p_action text,
+  p_payload jsonb default '{}'::jsonb,
+  p_client_id text default null
+)
+returns jsonb as $$
+declare
+  v_user_id uuid := (select auth.uid());
+  v_ea record;
+  v_command public.commands%rowtype;
+  v_action text := upper(trim(coalesce(p_action, '')));
+  v_payload jsonb := coalesce(p_payload, '{}'::jsonb);
+  v_lot numeric;
+  v_risk numeric;
+  v_rr numeric;
+begin
+  if v_user_id is null then
+    return jsonb_build_object('ok', false, 'error', 'Unauthorized', 'status', 401);
+  end if;
+
+  if p_ea_id is null or not public.tcx_allowed_command(v_action) then
+    return jsonb_build_object('ok', false, 'error', 'Invalid command', 'status', 400);
+  end if;
+
+  if jsonb_typeof(v_payload) is distinct from 'object' then
+    v_payload := '{}'::jsonb;
+  end if;
+
+  if v_action = 'SET_RISK' then
+    begin
+      v_lot := (v_payload ->> 'lot')::numeric;
+      v_risk := (v_payload ->> 'risk')::numeric;
+      v_rr := (v_payload ->> 'rr')::numeric;
+    exception when others then
+      return jsonb_build_object('ok', false, 'error', 'Invalid risk settings', 'status', 400);
+    end;
+
+    if v_lot <= 0 or v_risk <= 0 or v_rr <= 0 then
+      return jsonb_build_object('ok', false, 'error', 'Invalid risk settings', 'status', 400);
+    end if;
+
+    v_payload := v_payload || jsonb_build_object('lot', v_lot, 'risk', v_risk, 'rr', v_rr);
+  end if;
+
+  select id, user_id, enabled, name, symbol
+    into v_ea
+  from public.ea_instances
+  where id = p_ea_id
+    and user_id = v_user_id
+    and enabled = true;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'EA not found or disabled', 'status', 404);
+  end if;
+
+  begin
+    insert into public.commands (
+      user_id,
+      ea_id,
+      client_id,
+      action,
+      payload,
+      status,
+      expires_at
+    )
+    values (
+      v_user_id,
+      p_ea_id,
+      nullif(left(coalesce(p_client_id, ''), 120), ''),
+      v_action,
+      v_payload,
+      'pending',
+      now() + interval '45 seconds'
+    )
+    returning * into v_command;
+  exception when unique_violation then
+    if p_client_id is null or trim(p_client_id) = '' then
+      raise;
+    end if;
+
+    select *
+      into v_command
+    from public.commands
+    where ea_id = p_ea_id
+      and user_id = v_user_id
+      and client_id = left(p_client_id, 120)
+    limit 1;
+
+    return jsonb_build_object('ok', true, 'command', to_jsonb(v_command), 'duplicate', true);
+  end;
+
+  insert into public.audit_logs (user_id, ea_id, action, details)
+  values (
+    v_user_id,
+    p_ea_id,
+    'create_command_rpc',
+    jsonb_build_object('command_id', v_command.id, 'action', v_action)
+  );
+
+  return jsonb_build_object('ok', true, 'command', to_jsonb(v_command));
+exception when others then
+  return jsonb_build_object('ok', false, 'error', sqlerrm, 'status', 500);
+end;
+$$ language plpgsql security invoker set search_path = public, extensions;
+
+revoke all on function public.tcx_create_command(uuid, text, jsonb, text) from public;
+revoke all on function public.tcx_create_command(uuid, text, jsonb, text) from anon;
+grant execute on function public.tcx_create_command(uuid, text, jsonb, text) to authenticated, service_role;
+
+create or replace function public.tcx_create_bulk_command(
+  p_ea_ids uuid[],
+  p_action text,
+  p_payload jsonb default '{}'::jsonb,
+  p_client_id text default null
+)
+returns jsonb as $$
+declare
+  v_user_id uuid := (select auth.uid());
+  v_ids uuid[];
+  v_expected int;
+  v_found int;
+  v_action text := upper(trim(coalesce(p_action, '')));
+  v_payload jsonb := coalesce(p_payload, '{}'::jsonb);
+  v_base_client_id text := left(coalesce(nullif(trim(coalesce(p_client_id, '')), ''), gen_random_uuid()::text), 120);
+  v_commands jsonb;
+  v_lot numeric;
+  v_risk numeric;
+  v_rr numeric;
+begin
+  if v_user_id is null then
+    return jsonb_build_object('ok', false, 'error', 'Unauthorized', 'status', 401);
+  end if;
+
+  select coalesce(array_agg(distinct ids.x), '{}'::uuid[])
+    into v_ids
+  from unnest(coalesce(p_ea_ids, '{}'::uuid[])) as ids(x)
+  where ids.x is not null;
+
+  v_expected := coalesce(array_length(v_ids, 1), 0);
+
+  if v_expected < 1 or v_expected > 100 or not public.tcx_allowed_command(v_action) then
+    return jsonb_build_object('ok', false, 'error', 'Invalid bulk command', 'status', 400);
+  end if;
+
+  if jsonb_typeof(v_payload) is distinct from 'object' then
+    v_payload := '{}'::jsonb;
+  end if;
+
+  if v_action = 'SET_RISK' then
+    begin
+      v_lot := (v_payload ->> 'lot')::numeric;
+      v_risk := (v_payload ->> 'risk')::numeric;
+      v_rr := (v_payload ->> 'rr')::numeric;
+    exception when others then
+      return jsonb_build_object('ok', false, 'error', 'Invalid risk settings', 'status', 400);
+    end;
+
+    if v_lot <= 0 or v_risk <= 0 or v_rr <= 0 then
+      return jsonb_build_object('ok', false, 'error', 'Invalid risk settings', 'status', 400);
+    end if;
+
+    v_payload := v_payload || jsonb_build_object('lot', v_lot, 'risk', v_risk, 'rr', v_rr);
+  end if;
+
+  select count(*)
+    into v_found
+  from public.ea_instances
+  where user_id = v_user_id
+    and enabled = true
+    and id = any(v_ids);
+
+  if v_found <> v_expected then
+    return jsonb_build_object('ok', false, 'error', 'One or more selected EAs were not found or are disabled', 'status', 404);
+  end if;
+
+  begin
+    with inserted as (
+      insert into public.commands (
+        user_id,
+        ea_id,
+        client_id,
+        action,
+        payload,
+        status,
+        expires_at
+      )
+      select
+        v_user_id,
+        ea.id,
+        v_base_client_id || ':' || ea.id::text,
+        v_action,
+        v_payload,
+        'pending',
+        now() + interval '45 seconds'
+      from public.ea_instances ea
+      where ea.user_id = v_user_id
+        and ea.enabled = true
+        and ea.id = any(v_ids)
+      returning *
+    )
+    select coalesce(jsonb_agg(to_jsonb(inserted) order by inserted.created_at desc), '[]'::jsonb)
+      into v_commands
+    from inserted;
+  exception when unique_violation then
+    select coalesce(jsonb_agg(to_jsonb(c) order by c.created_at desc), '[]'::jsonb)
+      into v_commands
+    from public.commands c
+    where c.user_id = v_user_id
+      and c.client_id = any (
+        select v_base_client_id || ':' || ids.x::text
+        from unnest(v_ids) as ids(x)
+      );
+
+    return jsonb_build_object('ok', true, 'commands', coalesce(v_commands, '[]'::jsonb), 'duplicate', true);
+  end;
+
+  insert into public.audit_logs (user_id, ea_id, action, details)
+  select
+    v_user_id,
+    (command_row.value ->> 'ea_id')::uuid,
+    'create_bulk_command_rpc',
+    jsonb_build_object(
+      'command_id', command_row.value ->> 'id',
+      'action', v_action,
+      'bulk_client_id', v_base_client_id
+    )
+  from jsonb_array_elements(coalesce(v_commands, '[]'::jsonb)) as command_row(value);
+
+  return jsonb_build_object('ok', true, 'commands', coalesce(v_commands, '[]'::jsonb));
+exception when others then
+  return jsonb_build_object('ok', false, 'error', sqlerrm, 'status', 500);
+end;
+$$ language plpgsql security invoker set search_path = public, extensions;
+
+revoke all on function public.tcx_create_bulk_command(uuid[], text, jsonb, text) from public;
+revoke all on function public.tcx_create_bulk_command(uuid[], text, jsonb, text) from anon;
+grant execute on function public.tcx_create_bulk_command(uuid[], text, jsonb, text) to authenticated, service_role;
+
+drop function if exists public.tcx_ea_sync(uuid, text, jsonb, boolean, uuid, text, text, text);
+
+create or replace function public.tcx_ea_sync(
+  p_ea_id uuid,
+  p_ea_token text,
+  p_state jsonb default null,
+  p_partial boolean default false,
+  p_ack_command_id uuid default null,
+  p_ack_status text default null,
+  p_ack_message text default '',
+  p_state_hash text default null,
+  p_claim_command boolean default true
+)
+returns jsonb as $$
+declare
+  v_ea record;
+  v_state_row record;
+  v_next_state jsonb;
+  v_state_hash text;
+  v_state_saved boolean := false;
+  v_cmd record;
+  v_ack jsonb := null;
+  v_now timestamptz := now();
+  v_ack_status text := lower(trim(coalesce(p_ack_status, '')));
+  v_token_hash text := encode(digest(coalesce(p_ea_token, ''), 'sha256'), 'hex');
+begin
+  if p_ea_id is null then
+    return jsonb_build_object('ok', false, 'error', 'EA not found or invalid token', 'status', 401, 'next_poll_ms', 5000);
+  end if;
+
+  perform set_config('tcx.ea_id', p_ea_id::text, true);
+  perform set_config('tcx.ea_token_hash', v_token_hash, true);
+
+  select id, user_id, name, symbol, account_login, last_seen_at
+    into v_ea
+  from public.ea_instances
+  where id = p_ea_id
+    and enabled = true
+    and token_hash = v_token_hash;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'EA not found or invalid token', 'status', 401, 'next_poll_ms', 5000);
+  end if;
+
+  if p_ack_command_id is not null then
+    if v_ack_status not in ('done', 'failed') then
+      return jsonb_build_object('ok', false, 'error', 'Invalid ack status', 'status', 400, 'next_poll_ms', 3000);
+    end if;
+
+    update public.commands
+       set status = v_ack_status,
+           done_at = v_now,
+           result_message = left(coalesce(p_ack_message, ''), 500)
+     where id = p_ack_command_id
+       and ea_id = v_ea.id
+       and status in ('pending', 'sent')
+     returning jsonb_build_object(
+       'id', id,
+       'status', status,
+       'message', result_message
+     )
+      into v_ack;
+
+    if v_ack is null then
+      v_ack := jsonb_build_object('ok', false, 'error', 'Ack command not found');
+    else
+      v_ack := jsonb_build_object('ok', true, 'command', v_ack);
+    end if;
+  end if;
+
+  if p_state is not null and jsonb_typeof(p_state) = 'object' then
+    select state, state_hash
+      into v_state_row
+    from public.ea_states
+    where ea_id = v_ea.id;
+
+    if p_partial and v_state_row.state is not null then
+      v_next_state := v_state_row.state || p_state;
+    else
+      v_next_state := p_state;
+    end if;
+
+    v_state_hash := coalesce(nullif(p_state_hash, ''), md5(v_next_state::text));
+
+    if v_state_row.state_hash is distinct from v_state_hash then
+      insert into public.ea_states (ea_id, user_id, state, state_hash, updated_at)
+      values (v_ea.id, v_ea.user_id, v_next_state, v_state_hash, v_now)
+      on conflict (ea_id) do update
+         set state = excluded.state,
+             state_hash = excluded.state_hash,
+             updated_at = excluded.updated_at;
+
+      v_state_saved := true;
+    end if;
+
+    update public.ea_instances
+       set last_seen_at = v_now,
+           symbol = coalesce(nullif(v_next_state ->> 'symbol', ''), symbol),
+           account_login = coalesce(nullif(v_next_state ->> 'accountLogin', ''), account_login)
+     where id = v_ea.id
+       and (
+         last_seen_at is null
+         or last_seen_at < v_now - interval '2 seconds'
+         or v_state_saved
+       );
+  else
+    update public.ea_instances
+       set last_seen_at = v_now
+     where id = v_ea.id
+       and (last_seen_at is null or last_seen_at < v_now - interval '5 seconds');
+  end if;
+
+  if coalesce(p_claim_command, true) then
+    update public.commands
+       set status = 'expired',
+           result_message = 'Expired before EA pickup'
+     where ea_id = v_ea.id
+       and status = 'pending'
+       and expires_at < v_now;
+
+    select id, action, payload, created_at, expires_at
+      into v_cmd
+    from public.commands
+    where ea_id = v_ea.id
+      and status = 'pending'
+      and expires_at > v_now
+    order by created_at asc
+    for update skip locked
+    limit 1;
+
+    if found then
+      update public.commands
+         set status = 'sent',
+             sent_at = v_now
+       where id = v_cmd.id;
+
+      return jsonb_build_object(
+        'ok', true,
+        'command', jsonb_build_object(
+          'id', v_cmd.id,
+          'action', v_cmd.action,
+          'payload', v_cmd.payload,
+          'created_at', v_cmd.created_at,
+          'expires_at', v_cmd.expires_at
+        ),
+        'ack', v_ack,
+        'state_saved', v_state_saved,
+        'next_poll_ms', 1000
+      );
+    end if;
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'command', null,
+    'ack', v_ack,
+    'state_saved', v_state_saved,
+    'next_poll_ms', 1000
+  );
+exception when others then
+  return jsonb_build_object('ok', false, 'error', sqlerrm, 'status', 500, 'next_poll_ms', 5000);
+end;
+$$ language plpgsql security invoker set search_path = public, extensions;
+
+revoke all on function public.tcx_ea_sync(uuid, text, jsonb, boolean, uuid, text, text, text, boolean) from public;
+revoke all on function public.tcx_ea_sync(uuid, text, jsonb, boolean, uuid, text, text, text, boolean) from authenticated;
+grant execute on function public.tcx_ea_sync(uuid, text, jsonb, boolean, uuid, text, text, text, boolean) to anon, service_role;

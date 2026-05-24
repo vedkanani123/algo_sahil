@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { hasSupabaseConfig, supabase, functionsUrl, SUPABASE_ANON_KEY } from './supabaseClient.js'
+import { hasSupabaseConfig, supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from './supabaseClient.js'
 import './styles.css'
 import {
   Activity,
@@ -8,7 +8,6 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   BarChart3,
-  Bell,
   ChevronDown,
   CheckCircle2,
   CircleDot,
@@ -31,7 +30,6 @@ import {
   Radio,
   RefreshCw,
   Save,
-  Send,
   Server,
   Settings2,
   Shield,
@@ -65,27 +63,11 @@ const ACTIONS = {
   PING: 'PING'
 }
 
-const TELEGRAM_PREFS = [
-  ['trade_open', 'Trade Open'],
-  ['sl_hit', 'SL Hit'],
-  ['tp_hit', 'TP Hit'],
-  ['rr1_hit', '1:1 Hit'],
-  ['rr2_hit', '1:2 Hit'],
-  ['rr3_hit', '1:3 Hit'],
-  ['partial_hit', 'Partial Close'],
-  ['command_sent', 'Command Sent'],
-  ['command_done', 'Command Done'],
-  ['command_failed', 'Command Failed'],
-  ['ea_message', 'EA Message'],
-  ['ea_online', 'EA Online'],
-  ['ea_offline', 'EA Offline']
-]
-
-const DEFAULT_TELEGRAM_PREFS = TELEGRAM_PREFS.reduce((acc, [key]) => ({ ...acc, [key]: true }), {})
 const LIVE_POLL_MS = 500
 const MULTI_LIVE_POLL_MS = 2000
+const EA_ONLINE_WINDOW_MS = 30000
 const CONTROL_OPTIMISTIC_MS = 12000
-const CONTROL_KEYS = ['partialsOn', 'secondEntryOn']
+const CONTROL_KEYS = ['partialsOn', 'secondEntryOn', 'thirdEntryOn']
 
 const RULE_COMPANIES = [
   { id: 'fundingpips', label: 'FundingPips', hasRules: true },
@@ -608,11 +590,26 @@ function groupCommandsByEa(rows, maxPerEa = 8) {
   return out
 }
 
-function accountUpdatedAt(instance, stateRow) {
-  return stateRow?.updated_at || instance?.last_seen_at || null
+function latestTimestamp(...values) {
+  let best = null
+  let bestTime = 0
+  for (const value of values) {
+    if (!value) continue
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) continue
+    if (date.getTime() > bestTime) {
+      best = value
+      bestTime = date.getTime()
+    }
+  }
+  return best
 }
 
-function isAccountOnline(instance, stateRow, windowMs = 15000) {
+function accountUpdatedAt(instance, stateRow) {
+  return latestTimestamp(stateRow?.updated_at, instance?.last_seen_at)
+}
+
+function isAccountOnline(instance, stateRow, windowMs = EA_ONLINE_WINDOW_MS) {
   const updatedAt = accountUpdatedAt(instance, stateRow)
   if (!updatedAt) return false
   const date = new Date(updatedAt)
@@ -634,14 +631,15 @@ function commandLabel(action) {
 }
 
 async function postCommand(session, eaId, action, payload = {}, clientId = uid()) {
-  const res = await fetch(`${functionsUrl}/create-command`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-    body: JSON.stringify({ ea_id: eaId, action, payload, client_id: clientId })
+  const { data, error } = await supabase.rpc('tcx_create_command', {
+    p_ea_id: eaId,
+    p_action: action,
+    p_payload: payload,
+    p_client_id: clientId
   })
-  const json = await res.json().catch(() => ({}))
-  if (!res.ok || !json.ok) throw new Error(json.error || 'Command failed')
-  return json.command || json
+  if (error) throw error
+  if (!data?.ok) throw new Error(data?.error || 'Command failed')
+  return data.command || data
 }
 
 function Login() {
@@ -746,6 +744,8 @@ function EASetup({ user, onCreated, onDone }) {
             <h3>Copy into MT5 EA inputs</h3>
             <CopyRow label="InpSupabaseEaId" value={created.id} />
             <CopyRow label="InpSupabaseEaToken" value={created.token} />
+            <CopyRow label="InpSupabaseProjectUrl" value={`${import.meta.env.VITE_SUPABASE_URL || 'https://PROJECT_REF.supabase.co'}`} />
+            <CopyRow label="InpSupabaseAnonKey" value={`${import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'}`} />
             <CopyRow label="InpSupabaseFunctionsUrl" value={`${import.meta.env.VITE_SUPABASE_URL?.replace('.supabase.co', '.functions.supabase.co') || 'https://PROJECT_REF.functions.supabase.co'}`} />
             <div className="dangerText"><AlertTriangle size={18} /> Save the token now. It is shown only once.</div>
             <button className="primaryBtn fullBtn" onClick={() => onDone?.()}>Go To Dashboard</button>
@@ -952,8 +952,9 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
 }
 
 function StatusHero({ state, selected }) {
-  const updatedAt = state?.updated_at ? new Date(state.updated_at) : null
-  const online = updatedAt && (Date.now() - updatedAt.getTime()) < 8000
+  const updatedAtValue = accountUpdatedAt(selected, state)
+  const updatedAt = updatedAtValue ? new Date(updatedAtValue) : null
+  const online = isAccountOnline(selected, state)
   const s = state?.state || {}
   const score = Number(s.qualityScore ?? 0)
   const scorePct = Math.max(0, Math.min(1, score / 8 || 0))
@@ -972,7 +973,7 @@ function StatusHero({ state, selected }) {
         </div>
 
         <h1>{s.status || 'No live state yet'}</h1>
-        <p>{s.message || 'Attach the EA to MT5, enable Algo Trading, and allow WebRequest to your Supabase functions URL.'}</p>
+        <p>{s.message || 'Attach the EA to MT5, enable Algo Trading, and allow WebRequest to your Supabase project URL.'}</p>
 
         <div className="chips">
           <div className="chip">Arm <b>{s.arm || 'OFF'}</b></div>
@@ -982,6 +983,7 @@ function StatusHero({ state, selected }) {
           <div className="chip">Spread <b>{s.spread ?? '--'}</b></div>
           <div className="chip">SL/TP Space <b>{s.spreadProtectionPoints ?? 0}</b></div>
           <div className="chip">2nd <b>{s.secondEntryOn ? 'ON' : 'OFF'}</b></div>
+          <div className="chip">3rd <b>{s.thirdEntryOn ? 'ON' : 'OFF'}</b></div>
           <div className="chip">1st Exit <b>{s.firstProfitExitOn === false ? 'OFF' : 'AUTO'}</b></div>
           <div className="chip">Quality <b>{s.qualityText || '--'}</b></div>
         </div>
@@ -1070,7 +1072,8 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
   const currency = s.currency || 'Money'
   const controlState = {
     partialsOn: optimisticControlValue(optimisticControls, 'partialsOn', s.partialsOn),
-    secondEntryOn: optimisticControlValue(optimisticControls, 'secondEntryOn', s.secondEntryOn)
+    secondEntryOn: optimisticControlValue(optimisticControls, 'secondEntryOn', s.secondEntryOn),
+    thirdEntryOn: optimisticControlValue(optimisticControls, 'thirdEntryOn', s.thirdEntryOn)
   }
   const controlStateRef = useRef(controlState)
   controlStateRef.current = controlState
@@ -1095,7 +1098,7 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
       const next = pruneOptimisticControls(prev, s)
       return Object.keys(next).length === Object.keys(prev).length ? prev : next
     })
-  }, [state?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, s.partialsOn, s.secondEntryOn, riskDirty, pcDirty, pendingRisk, pendingPc])
+  }, [state?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, s.partialsOn, s.secondEntryOn, s.thirdEntryOn, riskDirty, pcDirty, pendingRisk, pendingPc])
 
   async function cmd(action, payload = {}, options = {}) {
     if (!selected?.id) return alert('Create/select EA first')
@@ -1188,6 +1191,10 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
     return setBooleanControl('secondEntryOn', !controlStateRef.current.secondEntryOn)
   }
 
+  function toggleThirdEntry() {
+    return setBooleanControl('thirdEntryOn', !controlStateRef.current.thirdEntryOn)
+  }
+
   function firstBreakEven() {
     return cmd(ACTIONS.SET_PARTIALS, { firstBreakEven: true }, { lock: false })
   }
@@ -1251,10 +1258,13 @@ function CommandPanel({ session, selected, state, reloadCommands }) {
           <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'advanced' })} className={s.advanced ? 'active' : ''} disabled={busy === ACTIONS.SET_MODE}>Advanced</button>
           <button onClick={togglePartials} className={controlState.partialsOn ? 'active successToggle' : ''}>Partials {controlState.partialsOn ? 'ON' : 'OFF'}</button>
           <button onClick={toggleSecondEntry} className={controlState.secondEntryOn ? 'active successToggle' : ''}>2nd {controlState.secondEntryOn ? 'ON' : 'OFF'}</button>
+          <button onClick={toggleThirdEntry} className={controlState.thirdEntryOn ? 'active successToggle' : ''}>3rd {controlState.thirdEntryOn ? 'ON' : 'OFF'}</button>
         </div>
 
         <div className="inlineStatus">{s.secondEntryStatus || '2nd entry OFF'}</div>
+        <div className="inlineStatus">{s.thirdEntryStatus || '3rd entry OFF'}</div>
         <div className="inlineStatus">{s.firstProfitExitStatus || '1st auto exit waits 2nd'}</div>
+        <div className="inlineStatus">{s.secondProfitExitStatus || '2nd auto exit waits 3rd'}</div>
 
         <div className="settingsGrid">
           <StepperInput label="PC1 %" value={pc.pc1} onChange={value => updatePcField('pc1', value)} onStep={direction => stepPcField('pc1', direction)} stepLabel="+/- 1" />
@@ -1549,19 +1559,19 @@ function MultiAccountDashboard({ session, instances, onNewEa, onOpenAccount }) {
   async function postBulkCommand(action, payload = {}) {
     const selectedEaIds = selectedAccounts.map(account => account.instance.id)
     const bulkClientId = uid()
-    const res = await fetch(`${functionsUrl}/create-bulk-command`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify({ ea_ids: selectedEaIds, action, payload, client_id: bulkClientId })
+    const { data, error } = await supabase.rpc('tcx_create_bulk_command', {
+      p_ea_ids: selectedEaIds,
+      p_action: action,
+      p_payload: payload,
+      p_client_id: bulkClientId
     })
-    const json = await res.json().catch(() => ({}))
-    if (res.status === 404) throw new Error('BULK_FUNCTION_NOT_DEPLOYED')
-    if (!res.ok || !json.ok) throw new Error(json.error || 'Bulk command failed')
+    if (error) throw error
+    if (!data?.ok) throw new Error(data?.error || 'Bulk command failed')
     return {
       ok: true,
-      sent: json.commands?.length || 0,
+      sent: data.commands?.length || 0,
       failed: 0,
-      details: json.commands || []
+      details: data.commands || []
     }
   }
 
@@ -1587,12 +1597,7 @@ function MultiAccountDashboard({ session, instances, onNewEa, onOpenAccount }) {
     setResult({ action, status: 'sending', sent: 0, failed: 0 })
     try {
       let summary
-      try {
-        summary = await postBulkCommand(action, payload)
-      } catch (error) {
-        if (error.message !== 'BULK_FUNCTION_NOT_DEPLOYED') throw error
-        summary = await postFallbackCommands(action, payload)
-      }
+      summary = await postBulkCommand(action, payload)
       setResult({ action, status: summary.failed ? 'partial' : 'sent', ...summary })
       await loadMultiData()
     } catch (error) {
@@ -1754,7 +1759,8 @@ function AccountQuickControls({ session, instance, stateRow, onCommandDone }) {
   const currency = s.currency || 'Money'
   const controlState = {
     partialsOn: optimisticControlValue(optimisticControls, 'partialsOn', s.partialsOn),
-    secondEntryOn: optimisticControlValue(optimisticControls, 'secondEntryOn', s.secondEntryOn)
+    secondEntryOn: optimisticControlValue(optimisticControls, 'secondEntryOn', s.secondEntryOn),
+    thirdEntryOn: optimisticControlValue(optimisticControls, 'thirdEntryOn', s.thirdEntryOn)
   }
   const controlStateRef = useRef(controlState)
   controlStateRef.current = controlState
@@ -1778,7 +1784,7 @@ function AccountQuickControls({ session, instance, stateRow, onCommandDone }) {
       const next = pruneOptimisticControls(prev, s)
       return Object.keys(next).length === Object.keys(prev).length ? prev : next
     })
-  }, [stateRow?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, s.partialsOn, s.secondEntryOn, riskDirty, pcDirty, pendingRisk, pendingPc])
+  }, [stateRow?.updated_at, s.lot, s.risk, s.rr, s.pc1, s.pc2, s.pc3, s.partialsOn, s.secondEntryOn, s.thirdEntryOn, riskDirty, pcDirty, pendingRisk, pendingPc])
 
   async function cmd(action, payload = {}, options = {}) {
     if (!instance?.id) return false
@@ -1881,7 +1887,10 @@ function AccountQuickControls({ session, instance, stateRow, onCommandDone }) {
           <button onClick={() => cmd(ACTIONS.SET_MODE, { mode: 'advanced' })} className={s.advanced ? 'active' : ''} disabled={busy === ACTIONS.SET_MODE}>Advanced</button>
           <button onClick={() => setBooleanControl('partialsOn', !controlStateRef.current.partialsOn)} className={controlState.partialsOn ? 'active successToggle' : ''}>Partials {controlState.partialsOn ? 'ON' : 'OFF'}</button>
           <button onClick={() => setBooleanControl('secondEntryOn', !controlStateRef.current.secondEntryOn)} className={controlState.secondEntryOn ? 'active successToggle' : ''}>2nd {controlState.secondEntryOn ? 'ON' : 'OFF'}</button>
+          <button onClick={() => setBooleanControl('thirdEntryOn', !controlStateRef.current.thirdEntryOn)} className={controlState.thirdEntryOn ? 'active successToggle' : ''}>3rd {controlState.thirdEntryOn ? 'ON' : 'OFF'}</button>
         </div>
+        <div className="inlineStatus">{s.thirdEntryStatus || '3rd entry OFF'}</div>
+        <div className="inlineStatus">{s.secondProfitExitStatus || '2nd auto exit waits 3rd'}</div>
         <div className="settingsGrid accountSettingsGrid">
           <StepperInput label="PC1 %" value={pc.pc1} onChange={value => updatePcField('pc1', value)} onStep={direction => stepPcField('pc1', direction)} stepLabel="+/- 1" />
           <StepperInput label="PC2 %" value={pc.pc2} onChange={value => updatePcField('pc2', value)} onStep={direction => stepPcField('pc2', direction)} stepLabel="+/- 1" />
@@ -1947,246 +1956,57 @@ function AccountCommandsCompact({ commands }) {
   )
 }
 
-function TelegramSettingsPage({ session }) {
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [chatLoading, setChatLoading] = useState(false)
-  const [notice, setNotice] = useState('')
-  const [error, setError] = useState('')
-  const [hasToken, setHasToken] = useState(false)
-  const [botUsername, setBotUsername] = useState('')
-  const [savedMeta, setSavedMeta] = useState({ connected_at: null, updated_at: null })
-  const [form, setForm] = useState({
-    enabled: false,
-    bot_token: '',
-    chat_id: '',
-    prefs: DEFAULT_TELEGRAM_PREFS
-  })
-
-  const authHeaders = useMemo(() => ({
-    'Content-Type': 'application/json',
-    apikey: SUPABASE_ANON_KEY,
-    Authorization: `Bearer ${session.access_token}`
-  }), [session.access_token])
-
-  const loadSettings = useCallback(async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const res = await fetch(`${functionsUrl}/telegram-settings`, { headers: authHeaders })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok || !json.ok) throw new Error(json.error || 'Unable to load Telegram settings')
-      const s = json.settings || {}
-      setHasToken(Boolean(s.has_token))
-      setBotUsername(s.bot_username || '')
-      setSavedMeta({ connected_at: s.connected_at || null, updated_at: s.updated_at || null })
-      setForm({
-        enabled: Boolean(s.enabled),
-        bot_token: '',
-        chat_id: s.chat_id || '',
-        prefs: { ...DEFAULT_TELEGRAM_PREFS, ...(s.prefs || {}) }
-      })
-    } catch (e) {
-      setError(String(e.message || e))
-    } finally {
-      setLoading(false)
-    }
-  }, [authHeaders])
-
-  useEffect(() => { loadSettings() }, [loadSettings])
-
-  function setPref(key, value) {
-    setForm(current => ({ ...current, prefs: { ...current.prefs, [key]: value } }))
-  }
-
-  async function saveSettings(test = false) {
-    setSaving(true)
-    setNotice('')
-    setError('')
-    try {
-      const res = await fetch(`${functionsUrl}/telegram-settings`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          enabled: test ? true : form.enabled,
-          bot_token: form.bot_token.trim() || undefined,
-          chat_id: form.chat_id.trim(),
-          prefs: form.prefs,
-          test
-        })
-      })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok || !json.ok) throw new Error(json.error || 'Unable to save Telegram settings')
-      const s = json.settings || {}
-      setHasToken(Boolean(s.has_token))
-      setBotUsername(s.bot_username || botUsername)
-      setSavedMeta({ connected_at: s.connected_at || null, updated_at: s.updated_at || null })
-      setForm(current => ({ ...current, enabled: Boolean(s.enabled), bot_token: '', chat_id: s.chat_id || current.chat_id, prefs: { ...DEFAULT_TELEGRAM_PREFS, ...(s.prefs || current.prefs) } }))
-      setNotice(test ? 'Telegram saved and test message sent.' : 'Telegram settings saved.')
-    } catch (e) {
-      setError(String(e.message || e))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function getChatId() {
-    setChatLoading(true)
-    setNotice('')
-    setError('')
-    try {
-      const res = await fetch(`${functionsUrl}/telegram-chat-id`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({ bot_token: form.bot_token.trim() || undefined })
-      })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok || !json.ok) throw new Error(json.error || 'Unable to get Telegram chat ID')
-      setBotUsername(json.bot_username || botUsername)
-      const chatId = json.chat?.id || form.chat_id
-      setForm(current => ({ ...current, enabled: true, chat_id: chatId }))
-
-      const saveRes = await fetch(`${functionsUrl}/telegram-settings`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          enabled: true,
-          bot_token: form.bot_token.trim() || undefined,
-          chat_id: chatId,
-          prefs: form.prefs,
-          test: false
-        })
-      })
-      const saveJson = await saveRes.json().catch(() => ({}))
-      if (!saveRes.ok || !saveJson.ok) throw new Error(saveJson.error || 'Chat ID detected but could not be saved')
-      const s = saveJson.settings || {}
-      setHasToken(Boolean(s.has_token))
-      setSavedMeta({ connected_at: s.connected_at || null, updated_at: s.updated_at || null })
-      setForm(current => ({ ...current, enabled: Boolean(s.enabled), bot_token: '', chat_id: s.chat_id || chatId, prefs: { ...DEFAULT_TELEGRAM_PREFS, ...(s.prefs || current.prefs) } }))
-      setNotice(`Chat ID detected and saved${json.chat?.username ? ` for @${json.chat.username}` : ''}.`)
-    } catch (e) {
-      setError(String(e.message || e))
-    } finally {
-      setChatLoading(false)
-    }
-  }
-
-  async function disconnect() {
-    if (!window.confirm('Disconnect Telegram alerts?')) return
-    setSaving(true)
-    setNotice('')
-    setError('')
-    try {
-      const res = await fetch(`${functionsUrl}/telegram-settings`, { method: 'DELETE', headers: authHeaders })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok || !json.ok) throw new Error(json.error || 'Unable to disconnect Telegram')
-      setHasToken(false)
-      setBotUsername('')
-      setSavedMeta({ connected_at: null, updated_at: null })
-      setForm({ enabled: false, bot_token: '', chat_id: '', prefs: DEFAULT_TELEGRAM_PREFS })
-      setNotice('Telegram disconnected.')
-    } catch (e) {
-      setError(String(e.message || e))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  if (loading) {
-    return (
-      <section className="glass panel">
-        <div className="emptyState">Loading Telegram settings...</div>
-      </section>
-    )
-  }
+function ConnectionSettingsPage() {
+  const projectUrl = SUPABASE_URL || 'https://YOUR_PROJECT_REF.supabase.co'
+  const anonKey = SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'
+  const rpcUrl = `${projectUrl.replace(/\/$/, '')}/rest/v1/rpc/tcx_ea_sync`
 
   return (
     <section className="settingsPage">
       <div className="glass panel telegramPanel">
         <div className="panelHeader settingsHeader">
-          <div className="panelIcon"><Bell /></div>
+          <div className="panelIcon"><Database /></div>
           <div>
-            <p className="sectionEyebrow">Alerts</p>
-            <h2>Telegram Settings</h2>
+            <p className="sectionEyebrow">RPC bridge</p>
+            <h2>Supabase Connection</h2>
           </div>
-          <div className={`telegramStatus ${form.enabled ? 'connected' : ''}`}>
-            {form.enabled ? 'Connected' : 'Disabled'}
-          </div>
+          <div className="telegramStatus connected">Active</div>
         </div>
 
         <div className="telegramGrid">
-          {(hasToken || form.chat_id || botUsername) && (
-            <div className="telegramSavedBox">
-              <div><span>Bot Token</span><strong>{hasToken ? 'Saved securely' : 'Not saved'}</strong></div>
-              <div><span>Chat ID</span><strong>{form.chat_id || 'Not set'}</strong></div>
-              <div><span>Bot</span><strong>{botUsername ? `@${botUsername}` : 'Not checked'}</strong></div>
-              <div><span>Updated</span><strong>{formatClock(savedMeta.updated_at)}</strong></div>
-            </div>
-          )}
+          <div className="telegramSavedBox">
+            <div><span>EA Sync</span><strong>Postgres RPC</strong></div>
+            <div><span>Commands</span><strong>Postgres RPC</strong></div>
+            <div><span>Dashboard</span><strong>Database + Realtime</strong></div>
+            <div><span>Edge Calls</span><strong>Unused</strong></div>
+          </div>
 
-          <label className="toggleLine">
-            <input type="checkbox" checked={form.enabled} onChange={e => setForm(current => ({ ...current, enabled: e.target.checked }))} />
-            <span>Enable Telegram Alerts</span>
+          <label>
+            Project URL
+            <input value={projectUrl} readOnly />
           </label>
 
           <label>
-            Telegram Bot Token
-            <input
-              type="password"
-              value={form.bot_token}
-              onChange={e => setForm(current => ({ ...current, bot_token: e.target.value }))}
-              placeholder={hasToken ? 'Token saved - paste new token to replace' : '123456789:AA...'}
-              autoComplete="off"
-            />
+            Anon Key
+            <input value={anonKey} readOnly />
           </label>
 
           <label>
-            Telegram Chat ID
-            <div className="chatIdRow">
-              <input
-                value={form.chat_id}
-                onChange={e => setForm(current => ({ ...current, chat_id: e.target.value }))}
-                placeholder="Press Start in your bot, then get chat ID"
-              />
-              <button className="ghostBtn" onClick={getChatId} disabled={chatLoading || (!form.bot_token.trim() && !hasToken)}>
-                <Send size={16} /> {chatLoading ? 'Checking...' : 'Get Chat ID'}
-              </button>
-            </div>
+            EA RPC URL
+            <input value={rpcUrl} readOnly />
           </label>
-
-          {botUsername && <div className="telegramBotLine">Bot: @{botUsername}</div>}
-          {notice && <div className="notice">{notice}</div>}
-          {error && <div className="notice errorNotice">{error}</div>}
 
           <div className="telegramActions">
-            <button className="primaryBtn" onClick={() => saveSettings(true)} disabled={saving}>
-              <Send size={16} /> {saving ? 'Saving...' : 'Save & Test'}
+            <button className="ghostBtn" onClick={() => navigator.clipboard?.writeText(projectUrl)}>
+              <Copy size={16} /> Project URL
             </button>
-            <button className="ghostBtn" onClick={() => saveSettings(false)} disabled={saving}>
-              <Save size={16} /> Save
+            <button className="ghostBtn" onClick={() => navigator.clipboard?.writeText(anonKey)}>
+              <Copy size={16} /> Anon Key
             </button>
-            <button className="ghostBtn dangerGhost" onClick={disconnect} disabled={saving || (!hasToken && !form.chat_id)}>
-              <Trash2 size={16} /> Disconnect
+            <button className="ghostBtn" onClick={() => navigator.clipboard?.writeText(rpcUrl)}>
+              <Copy size={16} /> RPC URL
             </button>
           </div>
-        </div>
-      </div>
-
-      <div className="glass panel telegramPanel">
-        <div className="panelHeader">
-          <div className="panelIcon"><Settings2 /></div>
-          <div>
-            <p className="sectionEyebrow">Preferences</p>
-            <h2>Message Types</h2>
-          </div>
-        </div>
-        <div className="prefGrid">
-          {TELEGRAM_PREFS.map(([key, label]) => (
-            <label className="prefItem" key={key}>
-              <input type="checkbox" checked={form.prefs[key] !== false} onChange={e => setPref(key, e.target.checked)} />
-              <span>{label}</span>
-            </label>
-          ))}
         </div>
       </div>
     </section>
@@ -2919,7 +2739,7 @@ function Dashboard({ session }) {
         setView={setView}
       />
       {view === 'settings' ? (
-        <TelegramSettingsPage session={session} />
+        <ConnectionSettingsPage />
       ) : view === 'accounts' ? (
         <MultiAccountDashboard
           session={session}

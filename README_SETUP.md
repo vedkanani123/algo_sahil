@@ -2,7 +2,9 @@
 
 This project is the professional easy version:
 
-React / Vite website -> Supabase Auth + Postgres + Edge Functions -> MT5 EA WebRequest -> your same Three Candle EA logic.
+React / Vite website -> Supabase Auth + Postgres RPC -> MT5 EA WebRequest -> your same Three Candle EA logic.
+
+The old Edge Functions are still included as a rollback path, but the normal command/state bridge uses Postgres RPC so the EA does not burn Edge Function invocation quota.
 
 No Python. No Node backend server. Node is only used to run/build the React website on your computer.
 
@@ -10,7 +12,7 @@ No Python. No Node backend server. Node is only used to run/build the React webs
 
 - `src/` - modern React dashboard UI
 - `supabase/schema.sql` - database tables + Row Level Security
-- `supabase/functions/*` - Edge Functions used by website and EA
+- `supabase/functions/*` - old Edge Functions kept for rollback, not used by the default website/EA flow
 - `../Three_Candle_EA_SUPABASE_WEB_FULL.mq5` - updated full MT5 EA file
 
 ## 1. Create Supabase project
@@ -19,7 +21,9 @@ No Python. No Node backend server. Node is only used to run/build the React webs
 2. Open SQL Editor.
 3. Paste and run everything from `supabase/schema.sql`.
 
-## 2. Deploy Edge Functions
+## 2. Optional legacy Edge Functions
+
+The current default path does not need Edge Functions for EA commands or EA state sync. Keep these deployed only if you want the old fallback path or Telegram settings screens.
 
 Install Supabase CLI first.
 
@@ -85,7 +89,9 @@ Do not add `SUPABASE_SERVICE_ROLE_KEY` to the web app. That key is only for Supa
 3. Copy:
    - `InpSupabaseEaId`
    - `InpSupabaseEaToken`
-   - `InpSupabaseFunctionsUrl`
+   - `InpSupabaseProjectUrl`
+   - `InpSupabaseAnonKey`
+   - `InpSupabaseFunctionsUrl` only if you intentionally switch `InpWebUseRpc` to `false`
 
 ## 6. Install EA in MT5
 
@@ -96,6 +102,12 @@ Do not add `SUPABASE_SERVICE_ROLE_KEY` to the web app. That key is only for Supa
 5. Enable WebRequest and add this URL:
 
 ```text
+https://YOUR_PROJECT_REF.supabase.co
+```
+
+If you intentionally use the old Edge Function fallback, also allow:
+
+```text
 https://YOUR_PROJECT_REF.functions.supabase.co
 ```
 
@@ -104,20 +116,25 @@ https://YOUR_PROJECT_REF.functions.supabase.co
 
 ```text
 InpWebControlEnabled    = true
+InpWebUseRpc            = true
+InpSupabaseProjectUrl   = https://YOUR_PROJECT_REF.supabase.co
+InpSupabaseAnonKey      = YOUR_SUPABASE_ANON_KEY
 InpSupabaseFunctionsUrl = https://YOUR_PROJECT_REF.functions.supabase.co
 InpSupabaseEaId         = copied EA ID
 InpSupabaseEaToken      = copied EA token
 InpRiskMoney            = account-currency risk per trade, for example 100
-InpWebPollMilliseconds  = 200
+InpWebPollMilliseconds  = 1000
+InpWebStateHeartbeatSeconds = 1
+InpWebFullStateSeconds  = 60
 ```
 
 Risk is now money, not percent. If the account currency is USD and the web dashboard risk field is `100`, the EA sizes the trade so the stop-loss risk is about USD 100 before broker lot-step rounding and margin limits.
 
 ## How ARM BUY works
 
-Website ARM BUY -> Supabase command row -> EA polls `ea-next-command` -> EA calls `SetArmMode(ARM_BUY)` -> your existing `TryArmedExecution()` waits for a fresh BUY model -> your existing `ExecuteSignal()` opens trade with your risk/SL/TP logic.
+Website ARM BUY -> Supabase RPC creates command row -> EA calls `tcx_ea_sync` RPC -> EA calls `SetArmMode(ARM_BUY)` -> your existing `TryArmedExecution()` waits for a fresh BUY model -> your existing `ExecuteSignal()` opens trade with your risk/SL/TP logic.
 
-For the multi-account controller, `create-bulk-command` creates one verified command row per selected EA. Each EA still receives only its own command and uses its own risk, lot, RR, partials, symbol, VPS, and broker account settings.
+For the multi-account controller, `tcx_create_bulk_command` creates one verified command row per selected EA. Each EA still receives only its own command and uses its own risk, lot, RR, partials, symbol, VPS, and broker account settings.
 
 ## Test order
 
@@ -134,16 +151,6 @@ Use demo first. Do not use live until the command log, state updates, close, BE,
 
 ## Telegram alerts
 
-Telegram alerts are configured per website user. Each user adds their own Telegram bot token and chat ID in `Settings -> Telegram Settings`.
+Telegram Edge Function calls are not used by the default website anymore. The `telegram-settings`, `telegram-chat-id`, and `telegram-offline-monitor` functions are kept only as legacy rollback files.
 
-User setup:
-
-1. Open Telegram and create a bot with `@BotFather`.
-2. Copy the bot token into the website Telegram settings.
-3. Open the new bot in Telegram and press Start.
-4. Click `Get Chat ID` in the website.
-5. Click `Save & Test`.
-
-Alerts are sent from Supabase Edge Functions, not from the EA file. The bot token is encrypted with `TELEGRAM_TOKEN_ENCRYPTION_KEY` before it is stored.
-
-To send EA offline alerts, schedule `telegram-offline-monitor` to run every minute. It sends one offline alert per offline transition when `last_seen_at` is older than 60 seconds.
+If you intentionally restore the old Telegram screen later, alerts are sent from Supabase Edge Functions and the bot token is encrypted with `TELEGRAM_TOKEN_ENCRYPTION_KEY` before it is stored.

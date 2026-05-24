@@ -9,4 +9,3 @@ if (!hasSupabaseConfig) {
 }
 
 export const supabase = hasSupabaseConfig ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null
-export const functionsUrl = hasSupabaseConfig ? `${SUPABASE_URL}/functions/v1` : ''

@@ -59,6 +59,11 @@ input bool              InpSecondEntryEnabled   = false;
 input double            InpSecondEntryTriggerLossR = 0.5;
 input double            InpSecondEntryCancelAtR = 2.0;
 
+input group "THIRD ENTRY"
+input bool              InpThirdEntryEnabled    = false;
+input double            InpThirdEntryTriggerLossR = 0.5;
+input double            InpThirdEntryCancelAtR  = 2.0;
+
 input group "FIRST TRADE AUTO EXIT"
 input bool              InpFirstProfitExitEnabled = true;
 
@@ -89,10 +94,15 @@ input bool              InpAutoFitPanelWidth    = true;
 
 input group "SUPABASE WEB CONTROL"
 input bool              InpWebControlEnabled       = true;
+input bool              InpWebUseRpc               = true;
+input string            InpSupabaseProjectUrl      = "https://YOUR_PROJECT_REF.supabase.co";
+input string            InpSupabaseAnonKey         = "PASTE_SUPABASE_ANON_KEY";
 input string            InpSupabaseFunctionsUrl    = "https://YOUR_PROJECT_REF.functions.supabase.co";
 input string            InpSupabaseEaId            = "PASTE_EA_ID_FROM_WEBSITE";
 input string            InpSupabaseEaToken         = "PASTE_EA_SECRET_TOKEN_FROM_WEBSITE";
-input int               InpWebPollMilliseconds     = 100;
+input int               InpWebPollMilliseconds     = 1000;
+input int               InpWebStateHeartbeatSeconds = 1;
+input int               InpWebFullStateSeconds     = 60;
 input int               InpWebTimeoutMs            = 1500;
 input bool              InpWebPostLiveState        = true;
 input bool              InpWebAllowCloseCommands   = true;
@@ -125,6 +135,7 @@ string UI = "TCX_UI_";
 #define B_MODE_SAFE "TCX_UI_B_MODE_SAFE"
 #define B_MODE_ADV  "TCX_UI_B_MODE_ADV"
 #define B_SECOND    "TCX_UI_B_SECOND"
+#define B_THIRD     "TCX_UI_B_THIRD"
 #define B_FIRST_BE  "TCX_UI_B_FIRST_BE"
 #define B_FIRST_BE_EXIT "TCX_UI_B_FIRST_BE_EXIT"
 
@@ -156,6 +167,7 @@ bool     g_PC_On         = false;
 bool     g_AutoArm       = false;
 bool     g_AdvancedMode  = false;
 bool     g_SecondEntryOn = false;
+bool     g_ThirdEntryOn  = false;
 bool     g_FirstProfitExitOn = true;
 double   g_PC1_Pct       = 30.0;
 double   g_PC2_Pct       = 30.0;
@@ -174,7 +186,13 @@ bool     g_SecondEntryDone  = false;
 bool     g_SecondEntryBlocked = false;
 datetime g_SecondEntryLastAttempt = 0;
 
+ulong    g_ThirdBaseTicket = 0;
+bool     g_ThirdEntryDone  = false;
+bool     g_ThirdEntryBlocked = false;
+datetime g_ThirdEntryLastAttempt = 0;
+
 datetime g_FirstProfitExitLastFailure = 0;
+datetime g_SecondProfitExitLastFailure = 0;
 
 string   g_LastMessage   = "Ready";
 color    g_LastMsgColor  = clrSilver;
@@ -192,7 +210,9 @@ datetime g_WebLastPollSecond = 0;
 datetime g_WebLastPostSecond = 0;
 uint     g_WebLastPollTick   = 0;
 uint     g_WebLastPostTick   = 0;
+uint     g_WebLastFullPostTick = 0;
 uint     g_WebBackoffUntilTick = 0;
+int      g_WebConsecutiveFailures = 0;
 bool     g_WebConnected      = false;
 string   g_WebLastError      = "";
 string   g_WebLastCommandId  = "";
@@ -728,6 +748,17 @@ bool IsSecondEntryPositionComment()
    return (StringFind(comment,"TCX Second")>=0);
 }
 
+bool IsThirdEntryPositionComment()
+{
+   string comment=PositionGetString(POSITION_COMMENT);
+   return (StringFind(comment,"TCX Third")>=0);
+}
+
+bool IsAddOnEntryPositionComment()
+{
+   return (IsSecondEntryPositionComment() || IsThirdEntryPositionComment());
+}
+
 bool SelectFirstEntryPosition()
 {
    bool found=false;
@@ -745,7 +776,77 @@ bool SelectFirstEntryPosition()
       if(sym!=_Symbol || magic!=InpMagic)
          continue;
 
-      if(IsSecondEntryPositionComment())
+      if(IsAddOnEntryPositionComment())
+         continue;
+
+      datetime openTime=(datetime)PositionGetInteger(POSITION_TIME);
+      if(!found || openTime<selectedTime || (openTime==selectedTime && ticket<selectedTicket))
+      {
+         found=true;
+         selectedTicket=ticket;
+         selectedTime=openTime;
+      }
+   }
+
+   if(!found || selectedTicket==0)
+      return false;
+
+   return PositionSelectByTicket(selectedTicket);
+}
+
+bool SelectSecondEntryPosition()
+{
+   bool found=false;
+   ulong selectedTicket=0;
+   datetime selectedTime=0;
+
+   for(int i=PositionsTotal()-1;i>=0;i--)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+
+      string sym=PositionGetString(POSITION_SYMBOL);
+      long magic=(long)PositionGetInteger(POSITION_MAGIC);
+      if(sym!=_Symbol || magic!=InpMagic)
+         continue;
+
+      if(!IsSecondEntryPositionComment())
+         continue;
+
+      datetime openTime=(datetime)PositionGetInteger(POSITION_TIME);
+      if(!found || openTime<selectedTime || (openTime==selectedTime && ticket<selectedTicket))
+      {
+         found=true;
+         selectedTicket=ticket;
+         selectedTime=openTime;
+      }
+   }
+
+   if(!found || selectedTicket==0)
+      return false;
+
+   return PositionSelectByTicket(selectedTicket);
+}
+
+bool SelectThirdEntryPosition()
+{
+   bool found=false;
+   ulong selectedTicket=0;
+   datetime selectedTime=0;
+
+   for(int i=PositionsTotal()-1;i>=0;i--)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+
+      string sym=PositionGetString(POSITION_SYMBOL);
+      long magic=(long)PositionGetInteger(POSITION_MAGIC);
+      if(sym!=_Symbol || magic!=InpMagic)
+         continue;
+
+      if(!IsThirdEntryPositionComment())
          continue;
 
       datetime openTime=(datetime)PositionGetInteger(POSITION_TIME);
@@ -852,6 +953,12 @@ string SecondEntryCycleKey(string field)
    return "TCX."+IntegerToString(login)+"."+_Symbol+"."+IntegerToString(InpMagic)+".second_cycle."+field;
 }
 
+string ThirdEntryCycleKey(string field)
+{
+   long login=(long)AccountInfoInteger(ACCOUNT_LOGIN);
+   return "TCX."+IntegerToString(login)+"."+_Symbol+"."+IntegerToString(InpMagic)+".third_cycle."+field;
+}
+
 bool LoadStateValue(ulong ticket,string field,double &value)
 {
    string key=StateKey(ticket,field);
@@ -872,10 +979,26 @@ bool LoadSecondEntryCycleValue(string field,double &value)
    return true;
 }
 
+bool LoadThirdEntryCycleValue(string field,double &value)
+{
+   string key=ThirdEntryCycleKey(field);
+   if(!GlobalVariableCheck(key))
+      return false;
+
+   value=GlobalVariableGet(key);
+   return true;
+}
+
 void ClearSecondEntryCycleState()
 {
    GlobalVariableDel(SecondEntryCycleKey("second_entry_done"));
    GlobalVariableDel(SecondEntryCycleKey("second_entry_blocked"));
+}
+
+void ClearThirdEntryCycleState()
+{
+   GlobalVariableDel(ThirdEntryCycleKey("third_entry_done"));
+   GlobalVariableDel(ThirdEntryCycleKey("third_entry_blocked"));
 }
 
 void SavePositionState()
@@ -921,6 +1044,27 @@ void ResetSecondEntryState()
    g_SecondEntryBlocked=false;
    g_SecondEntryLastAttempt=0;
    ClearSecondEntryCycleState();
+}
+
+void SaveThirdEntryState()
+{
+   GlobalVariableSet(ThirdEntryCycleKey("third_entry_done"),g_ThirdEntryDone ? 1.0 : 0.0);
+   GlobalVariableSet(ThirdEntryCycleKey("third_entry_blocked"),g_ThirdEntryBlocked ? 1.0 : 0.0);
+
+   if(g_ThirdBaseTicket>0)
+   {
+      GlobalVariableSet(StateKey(g_ThirdBaseTicket,"third_entry_done"),g_ThirdEntryDone ? 1.0 : 0.0);
+      GlobalVariableSet(StateKey(g_ThirdBaseTicket,"third_entry_blocked"),g_ThirdEntryBlocked ? 1.0 : 0.0);
+   }
+}
+
+void ResetThirdEntryState()
+{
+   g_ThirdBaseTicket=0;
+   g_ThirdEntryDone=false;
+   g_ThirdEntryBlocked=false;
+   g_ThirdEntryLastAttempt=0;
+   ClearThirdEntryCycleState();
 }
 
 void SyncSecondEntryState()
@@ -972,6 +1116,79 @@ void SyncSecondEntryState()
       {
          g_SecondEntryBlocked=true;
          SaveSecondEntryState();
+      }
+   }
+}
+
+void SyncThirdEntryState()
+{
+   int openCount=CountOurPositions();
+   if(openCount<=0)
+   {
+      if(g_ThirdBaseTicket>0 && g_ThirdEntryOn)
+         g_ThirdEntryOn=false;
+      ResetThirdEntryState();
+      return;
+   }
+
+   double cycleStored=0.0;
+   bool cycleDone=(LoadThirdEntryCycleValue("third_entry_done",cycleStored) && cycleStored>=0.5);
+   bool cycleBlocked=(LoadThirdEntryCycleValue("third_entry_blocked",cycleStored) && cycleStored>=0.5);
+
+   if(!SelectSecondEntryPosition())
+   {
+      g_ThirdBaseTicket=0;
+      bool changed=false;
+      if(cycleDone && !g_ThirdEntryDone)
+      {
+         g_ThirdEntryDone=true;
+         changed=true;
+      }
+      if(cycleBlocked && !g_ThirdEntryBlocked)
+      {
+         g_ThirdEntryBlocked=true;
+         changed=true;
+      }
+      if(changed)
+         SaveThirdEntryState();
+      return;
+   }
+
+   ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+   if(ticket!=g_ThirdBaseTicket)
+   {
+      g_ThirdBaseTicket=ticket;
+      g_ThirdEntryLastAttempt=0;
+
+      double stored=0.0;
+      if(LoadStateValue(ticket,"third_entry_done",stored))
+         g_ThirdEntryDone=(stored>=0.5);
+      else
+         g_ThirdEntryDone=false;
+
+      if(LoadStateValue(ticket,"third_entry_blocked",stored))
+         g_ThirdEntryBlocked=(stored>=0.5);
+      else
+         g_ThirdEntryBlocked=false;
+
+      if(cycleDone)
+         g_ThirdEntryDone=true;
+      if(cycleBlocked)
+         g_ThirdEntryBlocked=true;
+
+      SaveThirdEntryState();
+   }
+   else
+   {
+      if(cycleDone && !g_ThirdEntryDone)
+      {
+         g_ThirdEntryDone=true;
+         SaveThirdEntryState();
+      }
+      if(cycleBlocked && !g_ThirdEntryBlocked)
+      {
+         g_ThirdEntryBlocked=true;
+         SaveThirdEntryState();
       }
    }
 }
@@ -1987,6 +2204,140 @@ bool ExecuteSecondEntryFromBase(ulong baseTicket)
    return true;
 }
 
+bool ExecuteThirdEntryFromBase(ulong baseTicket)
+{
+   if(baseTicket==0 || !PositionSelectByTicket(baseTicket))
+      return false;
+
+   if(!IsSecondEntryPositionComment())
+   {
+      SetLastMessage("Third entry skipped - second trade not found",clrGold);
+      return false;
+   }
+
+   bool buy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+   double baseSL=NormalizeDouble(PositionGetDouble(POSITION_SL),_Digits);
+   double baseTP=NormalizeDouble(PositionGetDouble(POSITION_TP),_Digits);
+
+   if(baseSL<=0.0 || baseTP<=0.0)
+   {
+      SetLastMessage("Third entry skipped - second trade has no SL/TP",clrGold);
+      return false;
+   }
+
+   string reason="";
+   int openCount=CountOurPositions();
+   if(openCount!=1)
+   {
+      SetLastMessage("Third entry waits until only the second trade remains",clrGold);
+      return false;
+   }
+
+   int maxEntries=MaxEntriesPerCycle();
+   if(openCount>=maxEntries)
+   {
+      SetLastMessage("Third entry skipped - maximum "+IntegerToString(maxEntries)+" entries already open",clrGold);
+      return false;
+   }
+
+   if(g_ThirdEntryDone || g_ThirdEntryBlocked)
+      return false;
+
+   if(!IsTradingAllowedForDirection(buy,reason))
+   {
+      SetLastMessage(reason,clrTomato);
+      return false;
+   }
+
+   if(!SpreadAllowed(reason))
+   {
+      SetLastMessage(reason,clrTomato);
+      return false;
+   }
+
+   double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   double entry=buy ? ask : bid;
+   if(entry<=0.0)
+   {
+      SetLastMessage("Third entry skipped - no valid price",clrTomato);
+      return false;
+   }
+
+   if(!ValidateStops(buy,baseSL,baseTP,reason))
+   {
+      SetLastMessage("Third entry skipped: "+reason,clrTomato);
+      return false;
+   }
+
+   double lot=0.0;
+   double targetRisk=0.0;
+   double actualRisk=0.0;
+   if(!CalculateRiskVolume(buy,entry,baseSL,lot,targetRisk,actualRisk,reason))
+   {
+      SetLastMessage("Third entry risk failed: "+reason,clrTomato);
+      return false;
+   }
+
+   bool ok=false;
+   string comment="TCX Third";
+   if(buy)
+      ok=Trade.Buy(lot,_Symbol,0.0,baseSL,baseTP,comment+" BUY");
+   else
+      ok=Trade.Sell(lot,_Symbol,0.0,baseSL,baseTP,comment+" SELL");
+
+   if(!ok || !TradeRetcodeOK())
+   {
+      string firstError=Trade.ResultRetcodeDescription();
+
+      if(!InpFallbackNoInitialSLTP)
+      {
+         SetLastMessage("Third entry failed: "+firstError,clrTomato);
+         return false;
+      }
+
+      if(buy)
+         ok=Trade.Buy(lot,_Symbol,0.0,0.0,0.0,comment+" BUY protect");
+      else
+         ok=Trade.Sell(lot,_Symbol,0.0,0.0,0.0,comment+" SELL protect");
+
+      if(!ok || !TradeRetcodeOK())
+      {
+         SetLastMessage("Third entry failed: "+firstError+" | retry "+Trade.ResultRetcodeDescription(),clrTomato);
+         return false;
+      }
+   }
+
+   g_ThirdEntryDone=true;
+   g_ThirdEntryOn=false;
+   SetArmMode(ARM_NONE);
+   g_AutoArm=false;
+   SaveThirdEntryState();
+
+   Sleep(150);
+
+   bool protectionOK=true;
+   if(!EnforceSecondEntryProtection(buy,baseSL,baseTP,reason))
+   {
+      protectionOK=false;
+      if(reason=="")
+         reason=Trade.ResultRetcodeDescription();
+   }
+
+   if(!protectionOK && InpCloseIfProtectionFails)
+   {
+      ulong protectTicket=FindNewestOurPositionTicket(baseTicket);
+      if(protectTicket==0)
+         protectTicket=FindNewestOurPositionTicket(0);
+      CloseUnprotectedPosition(protectTicket,(buy ? "BUY" : "SELL")+" third entry closed - SL/TP protection failed");
+      return false;
+   }
+
+   SetLastMessage((buy ? "BUY" : "SELL")+" third entry placed | Lot "+DoubleToString(lot,VolumeDigits())+
+                  " | SL "+PriceText(baseSL)+" | TP "+PriceText(baseTP),clrLime);
+   return true;
+}
+
 void MonitorSecondEntry()
 {
    SyncSecondEntryState();
@@ -2055,6 +2406,74 @@ void MonitorSecondEntry()
    ExecuteSecondEntryFromBase(g_SecondBaseTicket);
 }
 
+void MonitorThirdEntry()
+{
+   SyncThirdEntryState();
+
+   int openCount=CountOurPositions();
+   if(openCount<=0)
+   {
+      ResetThirdEntryState();
+      return;
+   }
+
+   if(!g_ThirdEntryDone && SelectThirdEntryPosition())
+   {
+      g_ThirdEntryDone=true;
+      g_ThirdEntryOn=false;
+      SetArmMode(ARM_NONE);
+      g_AutoArm=false;
+      SaveThirdEntryState();
+      return;
+   }
+
+   if(g_ThirdBaseTicket==0 || !PositionSelectByTicket(g_ThirdBaseTicket))
+      return;
+
+   if(openCount!=1)
+      return;
+
+   bool buy=((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+   double entry=PositionGetDouble(POSITION_PRICE_OPEN);
+   double sl=PositionGetDouble(POSITION_SL);
+   if(entry<=0.0 || sl<=0.0)
+      return;
+
+   double rr=PositionRRFromValues(buy,entry,sl);
+   double cancelAt=MathMax(0.1,InpThirdEntryCancelAtR);
+   if(rr>=cancelAt && !g_ThirdEntryBlocked)
+   {
+      string beReason="";
+      bool beOK=MoveTicketToBreakEven(g_ThirdBaseTicket,beReason);
+      g_ThirdEntryBlocked=true;
+      g_ThirdEntryOn=false;
+      SetArmMode(ARM_NONE);
+      g_AutoArm=false;
+      SaveThirdEntryState();
+      string msg="Third entry blocked - second trade reached "+DoubleToString(cancelAt,1)+"R";
+      if(beOK)
+         msg+=(beReason=="already protected" ? " | SL already BE" : " | SL moved BE");
+      else if(beReason!="")
+         msg+=" | BE failed: "+beReason;
+      SetLastMessage(msg,beOK ? clrLime : clrGold);
+      return;
+   }
+
+   if(!g_ThirdEntryOn || g_ThirdEntryDone || g_ThirdEntryBlocked)
+      return;
+
+   double trigger=MathMax(0.1,InpThirdEntryTriggerLossR);
+   if(rr>-trigger)
+      return;
+
+   datetime now=TimeCurrent();
+   if(g_ThirdEntryLastAttempt>0 && now-g_ThirdEntryLastAttempt<10)
+      return;
+   g_ThirdEntryLastAttempt=now;
+
+   ExecuteThirdEntryFromBase(g_ThirdBaseTicket);
+}
+
 string SecondEntryStatusText()
 {
    if(!g_SecondEntryOn)
@@ -2068,6 +2487,25 @@ string SecondEntryStatusText()
    if(g_SecondEntryDone || CountOurPositions()>1)
       return "2nd entry done";
    return "2nd waits -"+DoubleToString(MathMax(0.1,InpSecondEntryTriggerLossR),1)+"R";
+}
+
+string ThirdEntryStatusText()
+{
+   if(g_ThirdEntryDone || SelectThirdEntryPosition())
+      return "3rd entry done";
+   if(g_ThirdEntryBlocked)
+      return "3rd blocked after "+DoubleToString(MathMax(0.1,InpThirdEntryCancelAtR),1)+"R";
+   if(!g_ThirdEntryOn)
+      return "3rd entry OFF";
+   if(!HasOurPosition())
+      return "3rd waits 2nd";
+   if(!SelectSecondEntryPosition())
+      return "3rd waits 2nd";
+   if(CountOurPositions()>1)
+      return "3rd waits first exit";
+   if(CountOurPositions()>=MaxEntriesPerCycle())
+      return "Max "+IntegerToString(MaxEntriesPerCycle())+" entries";
+   return "3rd waits -"+DoubleToString(MathMax(0.1,InpThirdEntryTriggerLossR),1)+"R from 2nd";
 }
 
 string FirstProfitExitStatusText()
@@ -2087,6 +2525,35 @@ string FirstProfitExitStatusText()
    if(expectedNet>=0.0)
       return "1st auto exit ready";
    return "1st auto exit waits profit";
+}
+
+string SecondProfitExitStatusText()
+{
+   if(!g_FirstProfitExitOn)
+      return "2nd auto exit OFF";
+   int openCount=CountOurPositions();
+   if(openCount<=0)
+      return "2nd auto exit waits 3rd";
+   if(!SelectSecondEntryPosition())
+      return "2nd trade closed";
+   if(openCount<2)
+      return "2nd auto exit waits 3rd";
+   if(!g_ThirdEntryDone && !SelectThirdEntryPosition())
+      return "2nd auto exit waits 3rd";
+   if(SelectFirstEntryPosition())
+      return "2nd auto exit waits 1st";
+
+   if(!SelectSecondEntryPosition())
+      return "2nd trade closed";
+
+   ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+   double expectedNet=0.0;
+   string reason="";
+   if(!ExpectedCloseNetForTicket(ticket,expectedNet,reason))
+      return "2nd auto exit waits price";
+   if(expectedNet>=0.0)
+      return "2nd auto exit ready";
+   return "2nd auto exit waits profit";
 }
 
 void TryArmedExecution()
@@ -2566,6 +3033,57 @@ bool CloseFirstTradeAtBreakEvenExitCore(bool manual)
    return false;
 }
 
+bool CloseSecondTradeAtBreakEvenExitCore(bool manual)
+{
+   if(CountOurPositions()<2)
+   {
+      if(manual)
+         SetLastMessage("2nd BE exit waits until the third trade is open",clrGold);
+      return false;
+   }
+
+   if(!SelectSecondEntryPosition())
+   {
+      if(manual)
+         SetLastMessage("No second trade for BE exit",clrGold);
+      return false;
+   }
+
+   ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
+   double expectedNet=0.0;
+   string reason="";
+   if(!ExpectedCloseNetForTicket(ticket,expectedNet,reason))
+   {
+      if(manual)
+         SetLastMessage("2nd BE exit failed: "+reason,clrTomato);
+      return false;
+   }
+
+   if(expectedNet<0.0)
+   {
+      if(manual)
+         SetLastMessage("2nd BE exit blocked - net would be "+SignedMoneyText(expectedNet)+" after spread/commission",clrGold);
+      return false;
+   }
+
+   if(Trade.PositionClose(ticket) && TradeRetcodeOK())
+   {
+      if(ticket==g_StateTicket)
+         ResetLocalTradeState();
+      SetLastMessage((manual ? "Second trade BE exit closed" : "Second trade auto profit exit closed")+
+                     " | est net "+SignedMoneyText(expectedNet),clrLime);
+      return true;
+   }
+
+   datetime now=TimeCurrent();
+   if(manual || g_SecondProfitExitLastFailure==0 || now-g_SecondProfitExitLastFailure>=2)
+   {
+      g_SecondProfitExitLastFailure=now;
+      SetLastMessage((manual ? "2nd BE exit failed: " : "2nd auto exit failed: ")+Trade.ResultRetcodeDescription(),clrTomato);
+   }
+   return false;
+}
+
 void CloseFirstTradeAtBreakEvenExit()
 {
    CloseFirstTradeAtBreakEvenExitCore(true);
@@ -2577,14 +3095,20 @@ void MonitorFirstTradeProfitExit()
       return;
 
    SyncSecondEntryState();
+   SyncThirdEntryState();
 
-   if(!g_SecondEntryDone && CountOurPositions()<2)
+   int openCount=CountOurPositions();
+   if(openCount<2)
       return;
 
-   if(CountOurPositions()<2)
+   if(SelectFirstEntryPosition())
+   {
+      CloseFirstTradeAtBreakEvenExitCore(false);
       return;
+   }
 
-   CloseFirstTradeAtBreakEvenExitCore(false);
+   if(g_ThirdEntryDone || SelectThirdEntryPosition())
+      CloseSecondTradeAtBreakEvenExitCore(false);
 }
 
 void CloseAllPositions()
@@ -3489,7 +4013,7 @@ void BuildPanel()
    // Risk + mode row.
    int riskW=(inner-gap)*65/100;
    int modeW=inner-riskW-gap;
-   int rowH=150;
+   int rowH=176;
 
    Rect(UI+"RISKBG",x+pad,cy,riskW,rowH,card,4);
    Border(UI+"RISKBRD",x+pad,cy,riskW,rowH,border);
@@ -3538,9 +4062,12 @@ void BuildPanel()
    EditBox(E_PC1,DoubleToString(g_PC1_Pct,0),x+pad+riskW+gap+184,cy+93,36,24,C'12,18,30',clrYellow,7);
    EditBox(E_PC2,DoubleToString(g_PC2_Pct,0),x+pad+riskW+gap+226,cy+93,36,24,C'12,18,30',clrYellow,7);
    EditBox(E_PC3,DoubleToString(g_PC3_Pct,0),x+pad+riskW+gap+268,cy+93,36,24,C'12,18,30',clrYellow,7);
-   Btn(B_SECOND,g_SecondEntryOn ? "2ND ON" : "2ND OFF",x+pad+riskW+gap+16,cy+122,72,24,g_SecondEntryOn ? C'20,150,65' : C'92,34,34',clrWhite,7);
-   Txt(UI+"SESTAT","2nd entry OFF",x+pad+riskW+gap+94,cy+126,C'150,165,195',7,false,25);
-   Txt(UI+"FPESTAT","1st auto exit waits 2nd",x+pad+riskW+gap+224,cy+126,C'150,165,195',7,false,25);
+   Btn(B_SECOND,g_SecondEntryOn ? "2ND ON" : "2ND OFF",x+pad+riskW+gap+16,cy+122,64,24,g_SecondEntryOn ? C'20,150,65' : C'92,34,34',clrWhite,7);
+   Btn(B_THIRD,g_ThirdEntryOn ? "3RD ON" : "3RD OFF",x+pad+riskW+gap+86,cy+122,64,24,g_ThirdEntryOn ? C'20,150,65' : C'92,34,34',clrWhite,7);
+   Txt(UI+"SESTAT","2nd entry OFF",x+pad+riskW+gap+158,cy+126,C'150,165,195',7,false,25);
+   Txt(UI+"TSTAT","3rd entry OFF",x+pad+riskW+gap+260,cy+126,C'150,165,195',7,false,25);
+   Txt(UI+"FPESTAT","1st auto exit waits 2nd",x+pad+riskW+gap+16,cy+150,C'150,165,195',7,false,25);
+   Txt(UI+"SPESTAT","2nd auto exit waits 3rd",x+pad+riskW+gap+180,cy+150,C'150,165,195',7,false,25);
    cy+=rowH+gap;
 
    // Message footer. Account statistics and position info are removed.
@@ -3598,14 +4125,23 @@ void UpdatePanel()
    string addEntryStatus="Open positions: "+IntegerToString(openCount)+" | model entries locked";
    if(hasPos)
    {
-      if(!g_SecondEntryOn)
+      if(g_SecondEntryDone)
+      {
+         if(g_ThirdEntryOn && !g_ThirdEntryDone && !g_ThirdEntryBlocked && SelectSecondEntryPosition() && openCount==1)
+            addEntryStatus="3rd waits for -"+DoubleToString(MathMax(0.1,InpThirdEntryTriggerLossR),1)+"R from 2nd | same SL/TP";
+         else if(g_ThirdEntryOn && !g_ThirdEntryDone && !g_ThirdEntryBlocked && SelectSecondEntryPosition() && openCount>1)
+            addEntryStatus="3rd waits until first trade exits";
+         else if(g_ThirdEntryDone)
+            addEntryStatus="Third entry already used for this trade";
+         else
+            addEntryStatus="Second entry already used for this trade";
+      }
+      else if(g_SecondEntryBlocked)
+         addEntryStatus="First trade reached "+DoubleToString(MathMax(0.1,InpSecondEntryCancelAtR),1)+"R, no second entry";
+      else if(!g_SecondEntryOn)
          addEntryStatus="Second entry OFF - one entry mode";
       else if(openCount>=MaxEntriesPerCycle())
          addEntryStatus="Maximum "+IntegerToString(MaxEntriesPerCycle())+" entries already open";
-      else if(g_SecondEntryDone)
-         addEntryStatus="Second entry already used for this trade";
-      else if(g_SecondEntryBlocked)
-         addEntryStatus="First trade reached "+DoubleToString(MathMax(0.1,InpSecondEntryCancelAtR),1)+"R, no second entry";
       else
          addEntryStatus="2nd waits for -"+DoubleToString(MathMax(0.1,InpSecondEntryTriggerLossR),1)+"R | same SL/TP";
    }
@@ -3649,6 +4185,7 @@ void UpdatePanel()
           g_ArmedMode==ARM_SELL ? "ARM SELL ON" : "ARM SELL");
    SetBtn(B_PC,g_PC_On ? C'20,150,65' : C'92,34,34',clrWhite,g_PC_On ? "PART ON" : "PART OFF");
    SetBtn(B_SECOND,g_SecondEntryOn ? C'20,150,65' : C'92,34,34',clrWhite,g_SecondEntryOn ? "2ND ON" : "2ND OFF");
+   SetBtn(B_THIRD,g_ThirdEntryOn ? C'20,150,65' : C'92,34,34',clrWhite,g_ThirdEntryOn ? "3RD ON" : "3RD OFF");
    SetBtn(B_MODE_SAFE,g_AdvancedMode ? C'24,34,48' : C'0,95,170',clrWhite);
    SetBtn(B_MODE_ADV,g_AdvancedMode ? C'0,95,170' : C'24,34,48',clrWhite);
    SetBtn(B_CLOSE,hasPos ? C'110,18,24' : C'36,42,54',clrWhite);
@@ -3735,7 +4272,9 @@ void UpdatePanel()
       SetTxt(UI+"PCSTAT",g_PC_On ? "Partials ready" : "Partials OFF",g_PC_On ? clrSkyBlue : clrGray);
    }
    SetTxt(UI+"SESTAT",SecondEntryStatusText(),g_SecondEntryOn ? clrSkyBlue : clrGray);
+   SetTxt(UI+"TSTAT",ThirdEntryStatusText(),(g_ThirdEntryOn || g_ThirdEntryDone || g_ThirdEntryBlocked) ? clrSkyBlue : clrGray);
    SetTxt(UI+"FPESTAT",FirstProfitExitStatusText(),g_FirstProfitExitOn ? clrSkyBlue : clrGray);
+   SetTxt(UI+"SPESTAT",SecondProfitExitStatusText(),g_FirstProfitExitOn ? clrSkyBlue : clrGray);
 
    if(hasPos)
    {
@@ -3797,6 +4336,9 @@ void UpdatePanel()
 //====================================================================
 void RefreshLotEdit();
 void RefreshRiskEdit();
+bool TCX_WebReady();
+bool TCX_RpcReady();
+bool TCX_SupabaseRpcSync(bool forceState,bool fullState,bool claimCommand,string ackId,string ackStatus,string ackMessage,string &response);
 void TCX_SupabasePostState(bool force);
 void TCX_SupabasePostFastState(bool force);
 
@@ -4162,8 +4704,15 @@ string TCX_BuildStateJson()
       +",\"secondEntryStatus\":\""+TCX_JsonEscape(SecondEntryStatusText())+"\""
       +",\"secondEntryTriggerR\":"+DoubleToString(MathMax(0.1,InpSecondEntryTriggerLossR),1)
       +",\"secondEntryCancelAtR\":"+DoubleToString(MathMax(0.1,InpSecondEntryCancelAtR),1)
+      +",\"thirdEntryOn\":"+TCX_BoolText(g_ThirdEntryOn)
+      +",\"thirdEntryDone\":"+TCX_BoolText(g_ThirdEntryDone)
+      +",\"thirdEntryBlocked\":"+TCX_BoolText(g_ThirdEntryBlocked)
+      +",\"thirdEntryStatus\":\""+TCX_JsonEscape(ThirdEntryStatusText())+"\""
+      +",\"thirdEntryTriggerR\":"+DoubleToString(MathMax(0.1,InpThirdEntryTriggerLossR),1)
+      +",\"thirdEntryCancelAtR\":"+DoubleToString(MathMax(0.1,InpThirdEntryCancelAtR),1)
       +",\"firstProfitExitOn\":"+TCX_BoolText(g_FirstProfitExitOn)
       +",\"firstProfitExitStatus\":\""+TCX_JsonEscape(FirstProfitExitStatusText())+"\""
+      +",\"secondProfitExitStatus\":\""+TCX_JsonEscape(SecondProfitExitStatusText())+"\""
       +",\"qualityScore\":"+IntegerToString(score)
       +",\"qualityText\":\""+QualityText(score)+"\""
       +",\"message\":\""+TCX_JsonEscape(g_LastMessage)+"\""
@@ -4201,7 +4750,6 @@ string TCX_BuildStateJson()
       +",\"sessionLeft\":\""+TCX_JsonEscape(SessionTimeLeft())+"\""
       +",\"candleTimer\":\""+TCX_JsonEscape(CandleCloseTimerText())+"\""
       +",\"position\":"+TCX_PositionJson()
-      +",\"structure\":"+TCX_StructureJson()
       +",\"tradeHistory\":"+TCX_TradeHistoryJson(50)
       +"}";
 }
@@ -4209,6 +4757,12 @@ string TCX_BuildStateJson()
 string TCX_BuildFastStateJson()
 {
    datetime now=TimeCurrent();
+   double balance=AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity=AccountInfoDouble(ACCOUNT_EQUITY);
+   double margin=AccountInfoDouble(ACCOUNT_MARGIN);
+   double freeMargin=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   double openPL=OpenProfit();
+   int sp=CurrentSpreadPoints();
    return "{"
       +"\"source\":\"mt5-ea\""
       +",\"serverTime\":\""+TCX_JsonEscape(TimeToString(now,TIME_DATE|TIME_SECONDS))+"\""
@@ -4227,8 +4781,13 @@ string TCX_BuildFastStateJson()
       +",\"secondEntryDone\":"+TCX_BoolText(g_SecondEntryDone)
       +",\"secondEntryBlocked\":"+TCX_BoolText(g_SecondEntryBlocked)
       +",\"secondEntryStatus\":\""+TCX_JsonEscape(SecondEntryStatusText())+"\""
+      +",\"thirdEntryOn\":"+TCX_BoolText(g_ThirdEntryOn)
+      +",\"thirdEntryDone\":"+TCX_BoolText(g_ThirdEntryDone)
+      +",\"thirdEntryBlocked\":"+TCX_BoolText(g_ThirdEntryBlocked)
+      +",\"thirdEntryStatus\":\""+TCX_JsonEscape(ThirdEntryStatusText())+"\""
       +",\"firstProfitExitOn\":"+TCX_BoolText(g_FirstProfitExitOn)
       +",\"firstProfitExitStatus\":\""+TCX_JsonEscape(FirstProfitExitStatusText())+"\""
+      +",\"secondProfitExitStatus\":\""+TCX_JsonEscape(SecondProfitExitStatusText())+"\""
       +",\"message\":\""+TCX_JsonEscape(g_LastMessage)+"\""
       +",\"lot\":"+DoubleToString(g_Lot,VolumeDigits())
       +",\"risk\":"+DoubleToString(g_RiskMoney,2)
@@ -4236,8 +4795,43 @@ string TCX_BuildFastStateJson()
       +",\"pc1\":"+DoubleToString(g_PC1_Pct,1)
       +",\"pc2\":"+DoubleToString(g_PC2_Pct,1)
       +",\"pc3\":"+DoubleToString(g_PC3_Pct,1)
+      +",\"spread\":"+IntegerToString(sp)
+      +",\"maxSpread\":"+IntegerToString(InpMaxSpreadPoints)
+      +",\"spreadProtectionPoints\":"+IntegerToString(SpreadProtectionPoints())
+      +",\"spreadBlock\":"+TCX_BoolText(SpreadBlocksTrades() && sp>InpMaxSpreadPoints)
+      +",\"balance\":"+DoubleToString(balance,2)
+      +",\"equity\":"+DoubleToString(equity,2)
+      +",\"margin\":"+DoubleToString(margin,2)
+      +",\"freeMargin\":"+DoubleToString(freeMargin,2)
+      +",\"currency\":\""+TCX_JsonEscape(AccountInfoString(ACCOUNT_CURRENCY))+"\""
+      +",\"openPL\":"+DoubleToString(openPL,2)
+      +",\"session\":\""+TCX_JsonEscape(SessionName())+"\""
+      +",\"sessionLeft\":\""+TCX_JsonEscape(SessionTimeLeft())+"\""
+      +",\"candleTimer\":\""+TCX_JsonEscape(CandleCloseTimerText())+"\""
       +",\"position\":"+TCX_PositionJson()
       +"}";
+}
+
+void TCX_WebMarkSuccess()
+{
+   g_WebConnected=true;
+   g_WebLastError="";
+   g_WebBackoffUntilTick=0;
+   g_WebConsecutiveFailures=0;
+}
+
+void TCX_WebMarkFailure(string label,int code)
+{
+   g_WebConsecutiveFailures++;
+   int delay=1000;
+   if(g_WebConsecutiveFailures==2) delay=3000;
+   else if(g_WebConsecutiveFailures==3) delay=5000;
+   else if(g_WebConsecutiveFailures==4) delay=15000;
+   else if(g_WebConsecutiveFailures>=5) delay=60000;
+
+   g_WebLastError=label+" HTTP "+IntegerToString(code)+" MT5err "+IntegerToString(GetLastError());
+   g_WebConnected=false;
+   g_WebBackoffUntilTick=GetTickCount()+(uint)delay;
 }
 
 bool TCX_HttpPostFunction(string functionName,string body,string &response)
@@ -4259,16 +4853,136 @@ bool TCX_HttpPostFunction(string functionName,string body,string &response)
    int code=WebRequest("POST",url,headers,InpWebTimeoutMs,data,result,resultHeaders);
    if(code<200 || code>=300)
    {
-      g_WebLastError=functionName+" HTTP "+IntegerToString(code)+" MT5err "+IntegerToString(GetLastError());
-      g_WebConnected=false;
-      g_WebBackoffUntilTick=GetTickCount()+500;
+      TCX_WebMarkFailure(functionName,code);
       return false;
    }
    response=CharArrayToString(result,0,-1,CP_UTF8);
-   g_WebConnected=true;
-   g_WebLastError="";
-   g_WebBackoffUntilTick=0;
+   TCX_WebMarkSuccess();
    return true;
+}
+
+string TCX_SupabaseProjectBaseUrl()
+{
+   string base=TCX_TrimRightSlash(InpSupabaseProjectUrl);
+   if(StringLen(base)>20 && StringFind(base,"YOUR_PROJECT_REF")<0)
+      return base;
+
+   base=TCX_TrimRightSlash(InpSupabaseFunctionsUrl);
+   StringReplace(base,".functions.supabase.co",".supabase.co");
+   return base;
+}
+
+bool TCX_RpcReady()
+{
+   if(!InpWebUseRpc)
+      return false;
+
+   string base=TCX_SupabaseProjectBaseUrl();
+   string key=InpSupabaseAnonKey;
+   StringTrimLeft(key);
+   StringTrimRight(key);
+
+   if(StringLen(base)<20 || StringFind(base,"YOUR_PROJECT_REF")>=0 || StringFind(base,".supabase.co")<0)
+      return false;
+   if(StringLen(key)<20 || StringFind(key,"PASTE_SUPABASE_ANON_KEY")>=0 || StringFind(key,"YOUR_SUPABASE_ANON_KEY")>=0)
+      return false;
+   return true;
+}
+
+bool TCX_HttpPostRpc(string rpcName,string body,string &response)
+{
+   response="";
+   if(!InpWebControlEnabled) return false;
+   uint nowTick=GetTickCount();
+   if(g_WebBackoffUntilTick>0 && nowTick<g_WebBackoffUntilTick)
+      return false;
+
+   string key=InpSupabaseAnonKey;
+   StringTrimLeft(key);
+   StringTrimRight(key);
+
+   string url=TCX_SupabaseProjectBaseUrl()+"/rest/v1/rpc/"+rpcName;
+   string headers="Content-Type: application/json\r\napikey: "+key+"\r\nAuthorization: Bearer "+key+"\r\n";
+   char data[];
+   char result[];
+   string resultHeaders="";
+   StringToCharArray(body,data,0,StringLen(body),CP_UTF8);
+   ResetLastError();
+   int code=WebRequest("POST",url,headers,InpWebTimeoutMs,data,result,resultHeaders);
+   if(code<200 || code>=300)
+   {
+      TCX_WebMarkFailure("rpc "+rpcName,code);
+      return false;
+   }
+   response=CharArrayToString(result,0,-1,CP_UTF8);
+   TCX_WebMarkSuccess();
+   return true;
+}
+
+bool TCX_SupabaseRpcSync(bool forceState,bool fullState,bool claimCommand,string ackId,string ackStatus,string ackMessage,string &response)
+{
+   response="";
+   if(!TCX_WebReady() || !TCX_RpcReady())
+      return false;
+
+   uint nowTick=GetTickCount();
+   bool sendState=false;
+   bool partialState=true;
+   string stateJson="";
+
+   if(InpWebPostLiveState)
+   {
+      int heartbeatMs=MathMax(1,InpWebStateHeartbeatSeconds)*1000;
+      int fullMs=MathMax(15,InpWebFullStateSeconds)*1000;
+      bool fullDue=(g_WebLastFullPostTick==0 || (uint)(nowTick-g_WebLastFullPostTick)>=(uint)fullMs);
+      bool heartbeatDue=(g_WebLastPostTick==0 || (uint)(nowTick-g_WebLastPostTick)>=(uint)heartbeatMs);
+
+      if(fullState || fullDue)
+      {
+         sendState=true;
+         partialState=false;
+         stateJson=TCX_BuildStateJson();
+      }
+      else if(forceState || g_WebStateDirty || heartbeatDue)
+      {
+         sendState=true;
+         partialState=true;
+         stateJson=TCX_BuildFastStateJson();
+      }
+   }
+
+   if(!claimCommand && ackId=="" && !sendState)
+      return false;
+
+   string body="{"
+      +"\"p_ea_id\":\""+TCX_JsonEscape(InpSupabaseEaId)+"\""
+      +",\"p_ea_token\":\""+TCX_JsonEscape(InpSupabaseEaToken)+"\""
+      +",\"p_claim_command\":"+TCX_BoolText(claimCommand);
+
+   if(ackId!="")
+   {
+      body+=",\"p_ack_command_id\":\""+TCX_JsonEscape(ackId)+"\""
+           +",\"p_ack_status\":\""+TCX_JsonEscape(ackStatus)+"\""
+           +",\"p_ack_message\":\""+TCX_JsonEscape(ackMessage)+"\"";
+   }
+
+   if(sendState)
+   {
+      body+=",\"p_partial\":"+TCX_BoolText(partialState)
+           +",\"p_state\":"+stateJson;
+   }
+
+   body+="}";
+
+   bool ok=TCX_HttpPostRpc("tcx_ea_sync",body,response);
+   if(ok && sendState)
+   {
+      g_WebLastPostTick=nowTick;
+      if(!partialState)
+         g_WebLastFullPostTick=nowTick;
+      g_WebStateDirty=false;
+   }
+   return ok;
 }
 
 string TCX_JsonString(string src,string key,string def="")
@@ -4356,6 +5070,11 @@ void TCX_AckCommand(string id,string status,string message)
 {
    if(id=="") return;
    string res="";
+   if(TCX_RpcReady())
+   {
+      TCX_SupabaseRpcSync(true,false,false,id,status,message,res);
+      return;
+   }
    string body="{\"ea_id\":\""+TCX_JsonEscape(InpSupabaseEaId)+"\",\"ea_token\":\""+TCX_JsonEscape(InpSupabaseEaToken)+"\",\"command_id\":\""+TCX_JsonEscape(id)+"\",\"status\":\""+TCX_JsonEscape(status)+"\",\"message\":\""+TCX_JsonEscape(message)+"\"}";
    TCX_HttpPostFunction("ea-ack-command",body,res);
 }
@@ -4526,6 +5245,7 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       g_PC3_Pct=ClampPercent(TCX_JsonNumber(raw,"pc3",g_PC3_Pct));
       bool explicitPartials=TCX_JsonHasKey(raw,"partialsOn");
       bool explicitSecond=TCX_JsonHasKey(raw,"secondEntryOn");
+      bool explicitThird=TCX_JsonHasKey(raw,"thirdEntryOn");
       bool firstBeRequested=TCX_JsonBool(raw,"firstBreakEven",false);
       bool firstBeExitRequested=TCX_JsonBool(raw,"firstBeExit",false);
 
@@ -4541,6 +5261,17 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
             g_AutoArm=false;
          }
          SyncSecondEntryState();
+      }
+
+      if(TCX_JsonHasKey(raw,"thirdEntryOn"))
+      {
+         g_ThirdEntryOn=TCX_JsonBool(raw,"thirdEntryOn",g_ThirdEntryOn);
+         if(!g_ThirdEntryOn && HasOurPosition())
+         {
+            SetArmMode(ARM_NONE);
+            g_AutoArm=false;
+         }
+         SyncThirdEntryState();
       }
 
       SetEditText(E_PC1,g_PC1_Pct,0);
@@ -4559,7 +5290,7 @@ bool TCX_ApplyWebCommand(string id,string action,string raw)
       }
       else
       {
-         msg=(explicitPartials || explicitSecond) ? "WEB trade controls updated" : "WEB partial values updated";
+         msg=(explicitPartials || explicitSecond || explicitThird) ? "WEB trade controls updated" : "WEB partial values updated";
          SetLastMessage(msg,clrSilver);
       }
    }
@@ -4584,8 +5315,16 @@ bool TCX_WebReady()
 {
    if(!InpWebControlEnabled)
       return false;
-   if(StringLen(InpSupabaseFunctionsUrl)<20 || StringFind(InpSupabaseFunctionsUrl,"YOUR_PROJECT_REF")>=0)
-      return false;
+   if(InpWebUseRpc)
+   {
+      if(!TCX_RpcReady())
+         return false;
+   }
+   else
+   {
+      if(StringLen(InpSupabaseFunctionsUrl)<20 || StringFind(InpSupabaseFunctionsUrl,"YOUR_PROJECT_REF")>=0)
+         return false;
+   }
    if(StringLen(InpSupabaseEaId)<8 || StringFind(InpSupabaseEaId,"PASTE_EA_ID")>=0)
       return false;
    if(StringLen(InpSupabaseEaToken)<12 || StringFind(InpSupabaseEaToken,"PASTE_EA_SECRET")>=0)
@@ -4599,12 +5338,31 @@ void TCX_SupabasePollCommands()
       return;
 
    uint nowTick=GetTickCount();
-   int ms=MathMax(100,InpWebPollMilliseconds);
+   int ms=InpWebUseRpc ? MathMax(500,InpWebPollMilliseconds) : MathMax(100,InpWebPollMilliseconds);
    if(g_WebLastPollTick>0 && (uint)(nowTick-g_WebLastPollTick)<(uint)ms)
       return;
    g_WebLastPollTick=nowTick;
 
    string res="";
+   if(TCX_RpcReady())
+   {
+      if(!TCX_SupabaseRpcSync(false,false,true,"","","",res))
+         return;
+
+      bool rpcHasCommand=(StringFind(res,"\"action\"")>=0 && StringFind(res,"\"id\"")>=0 && StringFind(res,"\"command\":null")<0);
+      if(!rpcHasCommand)
+         return;
+
+      string rpcId=TCX_JsonString(res,"id","");
+      string rpcAction=TCX_JsonString(res,"action","");
+      if(rpcAction=="")
+         return;
+
+      bool rpcOk=TCX_ApplyWebCommand(rpcId,rpcAction,res);
+      TCX_AckCommand(rpcId,rpcOk ? "done" : "failed",g_LastMessage);
+      return;
+   }
+
    string body="{\"ea_id\":\""+TCX_JsonEscape(InpSupabaseEaId)+"\",\"ea_token\":\""+TCX_JsonEscape(InpSupabaseEaToken)+"\",\"symbol\":\""+TCX_JsonEscape(_Symbol)+"\",\"magic\":"+IntegerToString(InpMagic)+"}";
    if(!TCX_HttpPostFunction("ea-next-command",body,res))
       return;
@@ -4628,6 +5386,13 @@ void TCX_SupabasePostState(bool force)
    if(!TCX_WebReady() || !InpWebPostLiveState)
       return;
 
+   if(TCX_RpcReady())
+   {
+      string res="";
+      TCX_SupabaseRpcSync(force,force,false,"","","",res);
+      return;
+   }
+
    uint nowTick=GetTickCount();
    int ms=1000;
    if(!force && !g_WebStateDirty && g_WebLastPostTick>0 && (uint)(nowTick-g_WebLastPostTick)<(uint)ms)
@@ -4644,6 +5409,13 @@ void TCX_SupabasePostFastState(bool force)
 {
    if(!TCX_WebReady() || !InpWebPostLiveState)
       return;
+
+   if(TCX_RpcReady())
+   {
+      string res="";
+      TCX_SupabaseRpcSync(force,false,false,"","","",res);
+      return;
+   }
 
    uint nowTick=GetTickCount();
    int ms=250;
@@ -4674,10 +5446,13 @@ void RuntimeLoop(bool allowTradeScan)
    {
       MonitorSecondEntry();
       MonitorFirstTradeProfitExit();
+      MonitorThirdEntry();
+      MonitorFirstTradeProfitExit();
    }
    else
    {
       SyncSecondEntryState();
+      SyncThirdEntryState();
    }
    TCX_SupabasePollCommands();
 
@@ -4781,6 +5556,7 @@ int OnInit()
    g_PC_On=InpPartialCloseEnabled;
    g_AdvancedMode=InpPartialCloseEnabled;
    g_SecondEntryOn=InpSecondEntryEnabled;
+   g_ThirdEntryOn=InpThirdEntryEnabled;
    g_FirstProfitExitOn=InpFirstProfitExitEnabled;
    g_PC1_Pct=ClampPercent(InpPC1_Percent);
    g_PC2_Pct=ClampPercent(InpPC2_Percent);
@@ -4798,13 +5574,14 @@ int OnInit()
    ChartHeartbeat();
    SyncPositionState();
    SyncSecondEntryState();
+   SyncThirdEntryState();
    DrawHistoricalSignals();
    UpdatePanel();
 
    SetLastMessage("Controller ready - buttons wait for next model, spread no block",clrSilver);
    UpdatePanel();
    if(InpWebControlEnabled)
-      EventSetMillisecondTimer(MathMax(100,InpWebPollMilliseconds));
+      EventSetMillisecondTimer(MathMax(InpWebUseRpc ? 500 : 100,InpWebPollMilliseconds));
    else
       EventSetTimer(1);
    ChartRedraw();
@@ -4994,6 +5771,21 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       SyncSecondEntryState();
       SetLastMessage(g_SecondEntryOn ? "Second entry enabled - waits for -0.5R before 2R" : "Second entry disabled",
                      g_SecondEntryOn ? clrSkyBlue : clrSilver);
+      TCX_FinishLocalControl();
+      return;
+   }
+
+   if(sparam==B_THIRD)
+   {
+      g_ThirdEntryOn=!g_ThirdEntryOn;
+      if(!g_ThirdEntryOn && HasOurPosition())
+      {
+         SetArmMode(ARM_NONE);
+         g_AutoArm=false;
+      }
+      SyncThirdEntryState();
+      SetLastMessage(g_ThirdEntryOn ? "Third entry enabled - waits for -0.5R from 2nd" : "Third entry disabled",
+                     g_ThirdEntryOn ? clrSkyBlue : clrSilver);
       TCX_FinishLocalControl();
       return;
    }
