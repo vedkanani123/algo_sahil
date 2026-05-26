@@ -414,25 +414,48 @@ code,
   font-weight: 700;
 }
 
-.topbar {
-  position: sticky;
-  top: 12px;
-  z-index: 20;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
-  align-items: center;
-  padding: 12px;
-  margin-bottom: 18px;
-  backdrop-filter: blur(18px);
+.app:has(.topbar) {
+  width: min(100%, 1680px);
+  padding: 18px 18px 18px 330px;
+  transition: padding 180ms ease;
 }
 
-.topbarLeft {
+.app:has(.topbarClosed) {
+  padding-left: 104px;
+}
+
+.topbar {
+  --sidebar-width: 294px;
+  position: fixed;
+  inset: 12px auto 12px 12px;
+  z-index: 30;
+  width: var(--sidebar-width);
   display: grid;
-  grid-template-columns: auto minmax(260px, 1fr);
-  gap: 18px;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 14px;
+  align-items: start;
+  padding: 12px;
+  overflow: hidden;
+  backdrop-filter: blur(18px);
+  transition: width 180ms ease, padding 180ms ease, transform 180ms ease;
+}
+
+.topbarClosed {
+  --sidebar-width: 72px;
+  padding: 10px;
+}
+
+.sidebarHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 10px;
   align-items: center;
   min-width: 0;
+}
+
+.topbarClosed .sidebarHeader {
+  grid-template-columns: 1fr;
+  gap: 8px;
 }
 
 .brand {
@@ -440,6 +463,10 @@ code,
   align-items: center;
   gap: 12px;
   min-width: 0;
+}
+
+.topbarClosed .brand {
+  justify-content: center;
 }
 
 .logo {
@@ -457,6 +484,10 @@ code,
   min-width: 0;
 }
 
+.topbarClosed .brandText {
+  display: none;
+}
+
 .brandText h2 {
   margin: 0;
   font-size: 18px;
@@ -466,7 +497,7 @@ code,
 .brandText > span,
 .emailPrivacy span {
   display: block;
-  max-width: 240px;
+  max-width: 210px;
   overflow: hidden;
   color: var(--muted);
   text-overflow: ellipsis;
@@ -504,9 +535,8 @@ code,
 }
 
 .topbarCollapseBtn {
-  width: 34px;
-  min-height: 34px;
-  margin-left: auto;
+  width: 38px;
+  min-height: 38px;
   padding: 0;
   border: 1px solid var(--border);
   background: var(--surface-raised);
@@ -515,31 +545,53 @@ code,
 }
 
 .topbar.open .topbarCollapseBtn svg {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
-.topbarClosed {
-  grid-template-columns: 1fr;
+.topbarClosed .topbarCollapseBtn {
+  width: 52px;
+  margin: 0 auto;
 }
 
-.topbarClosed .topbarLeft {
-  grid-template-columns: 1fr;
+.topbarClosed .topbarCollapseBtn svg {
+  transform: rotate(-90deg);
 }
 
-.topbarClosed .topbarSelect,
-.topbarClosed .topbarActions {
+.sidebarAccount {
+  min-width: 0;
+}
+
+.topbarClosed .sidebarAccount {
   display: none;
 }
 
 .topbarSelect {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) 42px 42px;
   gap: 8px;
   min-width: 0;
 }
 
 .topbarSelect.editing {
-  grid-template-columns: minmax(170px, 1fr) minmax(92px, 120px) auto auto;
+  grid-template-columns: 1fr;
+}
+
+.topbarSelect select,
+.topbarSelect input {
+  min-width: 0;
+}
+
+.topbarSelect:not(.editing) .iconTextBtn {
+  width: 42px;
+  min-height: 42px;
+  padding: 0;
+  gap: 0;
+  font-size: 0;
+}
+
+.topbarSelect:not(.editing) .iconTextBtn svg {
+  width: 17px;
+  height: 17px;
 }
 
 .symbolInput {
@@ -547,36 +599,69 @@ code,
 }
 
 .topbarActions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr;
+  align-self: end;
   gap: 8px;
+  min-width: 0;
+}
+
+.topbarActions > button {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .viewToggle {
-  display: inline-grid;
-  grid-template-columns: repeat(5, minmax(0, auto));
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-muted);
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
 }
 
 .viewToggle button {
-  min-height: 32px;
-  padding: 7px 10px;
+  width: 100%;
+  min-height: 44px;
+  justify-content: flex-start;
+  padding: 10px 12px;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
   box-shadow: none;
   white-space: nowrap;
 }
 
+.viewToggle button svg,
+.topbarActions > button svg {
+  flex: 0 0 auto;
+}
+
 .viewToggle button.active {
-  background: var(--surface-raised);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
+  background: rgba(19, 184, 164, 0.14);
+  color: #e9fffb;
+  border-color: rgba(19, 184, 164, 0.36);
+}
+
+.topbarClosed .viewToggle {
+  justify-items: center;
+}
+
+.topbarClosed .viewToggle button,
+.topbarClosed .topbarActions > button {
+  width: 52px;
+  min-height: 46px;
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+  font-size: 0;
+}
+
+.topbarClosed .viewToggle button span {
+  display: none;
+}
+
+.topbarClosed .syncBadge {
+  display: none;
 }
 
 .syncBadge {
@@ -1868,6 +1953,171 @@ code,
   gap: 10px;
 }
 
+.telegramManager {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.42fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.telegramBotList {
+  display: grid;
+  gap: 8px;
+}
+
+.telegramBotCard {
+  width: 100%;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 2px 9px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  color: var(--text);
+  text-align: left;
+  box-shadow: none;
+}
+
+.telegramBotCard span {
+  grid-row: 1 / 3;
+  width: 30px;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  background: rgba(19, 184, 164, 0.12);
+  color: #78fff1;
+}
+
+.telegramBotCard strong,
+.telegramBotCard small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.telegramBotCard strong {
+  font-size: 13px;
+}
+
+.telegramBotCard small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.telegramBotCard.active {
+  border-color: rgba(19, 184, 164, 0.45);
+  background: rgba(19, 184, 164, 0.12);
+}
+
+.telegramEditor {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.telegramEditorHeader {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(19, 184, 164, 0.22);
+  background: rgba(19, 184, 164, 0.07);
+}
+
+.telegramEditorHeader div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.telegramEditorHeader strong,
+.telegramEditorHeader span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.telegramEditorHeader strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.telegramEditorHeader span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.telegramMiniBadge {
+  flex: 0 0 auto;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 9px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.telegramFormGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.telegramWideField {
+  grid-column: 1 / -1;
+}
+
+.telegramInputAction {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.fetchChatBtn {
+  min-height: 44px;
+  padding-inline: 12px;
+  white-space: nowrap;
+}
+
+.telegramEnableLine {
+  width: fit-content;
+}
+
+.telegramPrefHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+}
+
+.telegramQuickBtns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.telegramPrefGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .historyPage {
   display: grid;
   gap: 18px;
@@ -2746,14 +2996,6 @@ code,
 }
 
 @media (max-width: 1180px) {
-  .topbar {
-    grid-template-columns: 1fr;
-  }
-
-  .topbarActions {
-    justify-content: flex-start;
-  }
-
   .mainLayout,
   .structureContainer,
   .settingsPage,
@@ -2804,6 +3046,12 @@ code,
     padding: 12px;
   }
 
+  .app:has(.topbar),
+  .app:has(.topbarClosed) {
+    width: 100%;
+    padding: 84px 12px 12px;
+  }
+
   .loginShell {
     grid-template-columns: 1fr;
     gap: 24px;
@@ -2815,31 +3063,73 @@ code,
   }
 
   .topbar {
-    position: static;
+    inset: 8px 8px auto 8px;
+    width: auto;
+    max-height: calc(100dvh - 16px);
+    grid-template-rows: auto auto auto auto;
+    gap: 10px;
+    padding: 10px;
+    overflow: auto;
   }
 
-  .topbarLeft {
-    grid-template-columns: 1fr;
+  .topbarClosed {
+    padding: 8px 10px;
   }
 
-  .topbarSelect,
+  .sidebarHeader,
+  .topbarClosed .sidebarHeader {
+    grid-template-columns: minmax(0, 1fr) 42px;
+  }
+
+  .topbarClosed .brand {
+    justify-content: flex-start;
+  }
+
+  .topbarClosed .brandText {
+    display: block;
+  }
+
+  .topbarClosed .emailPrivacy,
+  .topbarClosed .sidebarAccount,
+  .topbarClosed .viewToggle,
+  .topbarClosed .topbarActions {
+    display: none;
+  }
+
+  .topbarCollapseBtn,
+  .topbarClosed .topbarCollapseBtn {
+    width: 42px;
+    min-height: 42px;
+    margin: 0;
+  }
+
+  .topbar.open .topbarCollapseBtn svg {
+    transform: rotate(180deg);
+  }
+
+  .topbarClosed .topbarCollapseBtn svg {
+    transform: none;
+  }
+
   .topbarSelect.editing {
     grid-template-columns: 1fr;
   }
 
-  .topbarActions {
-    display: grid;
+  .viewToggle {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .syncBadge,
-  .topbarActions button,
-  .viewToggle {
+  .topbarActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .syncBadge {
+    grid-column: 1 / -1;
     width: 100%;
   }
 
-  .viewToggle {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .topbarActions > button {
+    justify-content: center;
   }
 
   .hero,
@@ -2891,6 +3181,13 @@ code,
   .accountHeaderMetrics {
     grid-column: 1 / -1;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .telegramManager,
+  .telegramFormGrid,
+  .telegramInputAction,
+  .telegramPrefGrid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2946,7 +3243,11 @@ code,
     .masterStats,
     .accountSnapshot,
     .accountSettingsGrid,
-    .accountModeToggle {
+    .accountModeToggle,
+    .telegramManager,
+    .telegramFormGrid,
+    .telegramInputAction,
+    .telegramPrefGrid {
     grid-template-columns: 1fr;
   }
 

@@ -2,6 +2,8 @@
 -- Run in Supabase SQL editor before deploying functions.
 
 create extension if not exists pgcrypto;
+create extension if not exists pg_net;
+create extension if not exists pg_cron;
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -103,6 +105,61 @@ create table if not exists public.telegram_ea_status (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.telegram_bots (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  label text not null default 'Telegram bot',
+  bot_secret_id uuid not null,
+  chat_id text not null,
+  bot_username text,
+  enabled boolean not null default true,
+  prefs jsonb not null default '{
+    "trade_open": true,
+    "sl_hit": true,
+    "tp_hit": true,
+    "rr1_hit": true,
+    "rr2_hit": true,
+    "rr3_hit": true,
+    "partial_hit": true,
+    "command_sent": true,
+    "command_done": true,
+    "command_failed": true,
+    "ea_message": true,
+    "ea_online": true,
+    "ea_offline": true
+  }'::jsonb,
+  delay_seconds integer not null default 0 check (delay_seconds >= 0 and delay_seconds <= 3600),
+  connected_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.telegram_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  event_id bigint references public.notification_events(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  ea_id uuid references public.ea_instances(id) on delete cascade,
+  bot_id uuid not null references public.telegram_bots(id) on delete cascade,
+  event_type text not null,
+  event_key text not null,
+  message_text text not null,
+  payload jsonb not null default '{}'::jsonb,
+  status text not null default 'pending' check (status in ('pending','queued','sent','skipped','failed')),
+  send_after timestamptz not null default now(),
+  request_id bigint,
+  error text,
+  telegram_message_id text,
+  created_at timestamptz not null default now(),
+  queued_at timestamptz,
+  sent_at timestamptz
+);
+
+create table if not exists public.telegram_chat_fetch_requests (
+  request_id bigint primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
 create index if not exists idx_ea_instances_user_id on public.ea_instances(user_id);
 create index if not exists idx_commands_ea_pending on public.commands(ea_id, status, created_at);
 create index if not exists idx_commands_pending_fast on public.commands(ea_id, created_at) where status = 'pending';
@@ -115,6 +172,13 @@ create index if not exists idx_ea_states_user_id on public.ea_states(user_id);
 create index if not exists idx_notification_events_user_created on public.notification_events(user_id, created_at desc);
 create index if not exists idx_notification_events_ea_id on public.notification_events(ea_id);
 create index if not exists idx_telegram_ea_status_user_id on public.telegram_ea_status(user_id);
+create index if not exists idx_telegram_bots_user_id on public.telegram_bots(user_id);
+create index if not exists idx_telegram_deliveries_user_created on public.telegram_deliveries(user_id, created_at desc);
+create index if not exists idx_telegram_deliveries_ea_id on public.telegram_deliveries(ea_id);
+create index if not exists idx_telegram_deliveries_bot_id on public.telegram_deliveries(bot_id);
+create index if not exists idx_telegram_deliveries_due on public.telegram_deliveries(status, send_after);
+create unique index if not exists idx_telegram_deliveries_event_bot_unique on public.telegram_deliveries(event_id, bot_id) where event_id is not null;
+create index if not exists idx_telegram_chat_fetch_user_created on public.telegram_chat_fetch_requests(user_id, created_at desc);
 
 alter table public.profiles enable row level security;
 alter table public.ea_instances enable row level security;
@@ -124,6 +188,9 @@ alter table public.audit_logs enable row level security;
 alter table public.telegram_settings enable row level security;
 alter table public.notification_events enable row level security;
 alter table public.telegram_ea_status enable row level security;
+alter table public.telegram_bots enable row level security;
+alter table public.telegram_deliveries enable row level security;
+alter table public.telegram_chat_fetch_requests enable row level security;
 
 drop policy if exists profiles_own on public.profiles;
 create policy profiles_own on public.profiles for all to authenticated using (id = (select auth.uid())) with check (id = (select auth.uid()));
@@ -162,6 +229,21 @@ create policy telegram_events_own_select on public.notification_events for selec
 
 drop policy if exists telegram_ea_status_own_select on public.telegram_ea_status;
 create policy telegram_ea_status_own_select on public.telegram_ea_status for select to authenticated using (user_id = (select auth.uid()));
+
+drop policy if exists telegram_bots_own_select on public.telegram_bots;
+create policy telegram_bots_own_select on public.telegram_bots for select to authenticated using (user_id = (select auth.uid()));
+
+drop policy if exists telegram_deliveries_own_select on public.telegram_deliveries;
+create policy telegram_deliveries_own_select on public.telegram_deliveries for select to authenticated using (user_id = (select auth.uid()));
+
+drop policy if exists telegram_chat_fetch_requests_closed on public.telegram_chat_fetch_requests;
+create policy telegram_chat_fetch_requests_closed on public.telegram_chat_fetch_requests for all to authenticated using (false) with check (false);
+
+revoke all on public.telegram_bots from anon, authenticated;
+revoke all on public.telegram_deliveries from anon, authenticated;
+revoke all on public.telegram_chat_fetch_requests from anon, authenticated;
+grant select on public.telegram_bots to authenticated;
+grant select on public.telegram_deliveries to authenticated;
 
 -- The MT5 EA calls tcx_ea_sync with the public anon key. These policies keep
 -- direct table access closed unless the RPC sets the EA id/token hash for the
@@ -819,3 +901,1163 @@ $$ language plpgsql security invoker set search_path = public, extensions;
 revoke all on function public.tcx_ea_sync(uuid, text, jsonb, boolean, uuid, text, text, text, boolean) from public;
 revoke all on function public.tcx_ea_sync(uuid, text, jsonb, boolean, uuid, text, text, text, boolean) from authenticated;
 grant execute on function public.tcx_ea_sync(uuid, text, jsonb, boolean, uuid, text, text, text, boolean) to anon, service_role;
+
+create or replace function public.tcx_telegram_default_prefs()
+returns jsonb as $$
+  select '{
+    "trade_open": true,
+    "sl_hit": true,
+    "tp_hit": true,
+    "rr1_hit": true,
+    "rr2_hit": true,
+    "rr3_hit": true,
+    "partial_hit": true,
+    "command_sent": true,
+    "command_done": true,
+    "command_failed": true,
+    "ea_message": true,
+    "ea_online": true,
+    "ea_offline": true
+  }'::jsonb;
+$$ language sql immutable set search_path = public;
+
+create or replace function public.tcx_telegram_merge_prefs(p_prefs jsonb)
+returns jsonb as $$
+declare
+  v_out jsonb := public.tcx_telegram_default_prefs();
+  v_key text;
+begin
+  if jsonb_typeof(p_prefs) = 'object' then
+    for v_key in select jsonb_object_keys(v_out)
+    loop
+      if jsonb_typeof(p_prefs -> v_key) = 'boolean' then
+        v_out := jsonb_set(v_out, array[v_key], p_prefs -> v_key, true);
+      end if;
+    end loop;
+  end if;
+  return v_out;
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_telegram_pref_enabled(p_prefs jsonb, p_event_type text)
+returns boolean as $$
+declare
+  v_prefs jsonb := public.tcx_telegram_merge_prefs(p_prefs);
+begin
+  return coalesce((v_prefs ->> p_event_type)::boolean, true);
+exception when others then
+  return true;
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_to_numeric(p_value text)
+returns numeric as $$
+begin
+  return nullif(trim(coalesce(p_value, '')), '')::numeric;
+exception when others then
+  return null;
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_to_boolean(p_value text)
+returns boolean as $$
+begin
+  return nullif(trim(coalesce(p_value, '')), '')::boolean;
+exception when others then
+  return null;
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_try_jsonb(p_value text)
+returns jsonb as $$
+begin
+  return p_value::jsonb;
+exception when others then
+  return null;
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_num_text(p_value numeric, p_digits integer default 2)
+returns text as $$
+begin
+  if p_value is null then
+    return '--';
+  end if;
+  return round(p_value, greatest(0, least(8, coalesce(p_digits, 2))))::text;
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_money_text(p_value numeric, p_currency text default '')
+returns text as $$
+declare
+  v_prefix text := case when coalesce(p_value, 0) >= 0 then '+' else '-' end;
+  v_currency text := nullif(trim(coalesce(p_currency, '')), '');
+begin
+  if p_value is null then
+    return '--';
+  end if;
+  return v_prefix || coalesce(v_currency || ' ', '') || public.tcx_num_text(abs(p_value), 2);
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_command_label(p_action text)
+returns text as $$
+  select trim(replace(upper(coalesce(p_action, '')), '_', ' '));
+$$ language sql immutable set search_path = public;
+
+create or replace function public.tcx_telegram_ea_title(p_ea_name text, p_ea_symbol text, p_state jsonb)
+returns text as $$
+declare
+  v_name text := coalesce(nullif(p_ea_name, ''), 'EA');
+  v_symbol text := coalesce(nullif(p_state ->> 'symbol', ''), nullif(p_ea_symbol, ''));
+begin
+  if v_symbol is not null and position(v_symbol in v_name) = 0 then
+    return v_name || ' (' || v_symbol || ')';
+  end if;
+  return v_name;
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_telegram_position_key(p_state jsonb)
+returns text as $$
+declare
+  v_pos jsonb := coalesce(p_state -> 'position', '{}'::jsonb);
+begin
+  return concat_ws(
+    ':',
+    coalesce(nullif(p_state ->> 'accountLogin', ''), 'account'),
+    coalesce(nullif(p_state ->> 'symbol', ''), 'symbol'),
+    coalesce(nullif(v_pos ->> 'type', ''), 'SIDE'),
+    coalesce(nullif(v_pos ->> 'entry', ''), '--'),
+    coalesce(nullif(v_pos ->> 'sl', ''), '--'),
+    coalesce(nullif(v_pos ->> 'tp', ''), '--')
+  );
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_telegram_reconcile_responses()
+returns integer as $$
+declare
+  v_delivery record;
+  v_json jsonb;
+  v_count integer := 0;
+begin
+  for v_delivery in
+    select d.id, d.event_id, r.status_code, r.content, r.error_msg
+    from public.telegram_deliveries d
+    join net._http_response r on r.id = d.request_id
+    where d.status = 'queued'
+    order by d.queued_at asc nulls first
+    limit 200
+  loop
+    v_json := public.tcx_try_jsonb(v_delivery.content);
+    if v_delivery.error_msg is null
+       and v_delivery.status_code between 200 and 299
+       and coalesce((v_json ->> 'ok')::boolean, false) then
+      update public.telegram_deliveries
+         set status = 'sent',
+             sent_at = now(),
+             telegram_message_id = nullif(v_json #>> '{result,message_id}', ''),
+             error = null
+       where id = v_delivery.id;
+    else
+      update public.telegram_deliveries
+         set status = 'failed',
+             error = left(coalesce(v_delivery.error_msg, v_json ->> 'description', 'Telegram request failed'), 500)
+       where id = v_delivery.id;
+
+      if v_delivery.event_id is not null
+         and not exists (
+           select 1
+           from public.telegram_deliveries d
+           where d.event_id = v_delivery.event_id
+             and d.status in ('pending', 'queued', 'sent')
+         ) then
+        update public.notification_events
+           set status = 'failed',
+               error = left(coalesce(v_delivery.error_msg, v_json ->> 'description', 'Telegram request failed'), 500)
+         where id = v_delivery.event_id;
+      end if;
+    end if;
+    v_count := v_count + 1;
+  end loop;
+  return v_count;
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_dispatch_due(p_limit integer default 100)
+returns integer as $$
+declare
+  v_delivery record;
+  v_token text;
+  v_request_id bigint;
+  v_count integer := 0;
+begin
+  perform public.tcx_telegram_reconcile_responses();
+
+  for v_delivery in
+    select
+      d.id,
+      d.event_id,
+      d.message_text,
+      b.chat_id,
+      b.bot_secret_id
+    from public.telegram_deliveries d
+    join public.telegram_bots b on b.id = d.bot_id
+    where d.status = 'pending'
+      and d.send_after <= now()
+      and b.enabled = true
+    order by d.send_after asc, d.created_at asc
+    limit greatest(1, least(500, coalesce(p_limit, 100)))
+    for update of d skip locked
+  loop
+    select decrypted_secret
+      into v_token
+    from vault.decrypted_secrets
+    where id = v_delivery.bot_secret_id;
+
+    if coalesce(v_token, '') = '' then
+      update public.telegram_deliveries
+         set status = 'failed',
+             error = 'Telegram bot token not found'
+       where id = v_delivery.id;
+      continue;
+    end if;
+
+    select net.http_post(
+      url := 'https://api.telegram.org/bot' || v_token || '/sendMessage',
+      body := jsonb_build_object(
+        'chat_id', v_delivery.chat_id,
+        'text', left(v_delivery.message_text, 3900),
+        'disable_web_page_preview', true
+      ),
+      headers := '{"Content-Type":"application/json"}'::jsonb,
+      timeout_milliseconds := 5000
+    )
+      into v_request_id;
+
+    update public.telegram_deliveries
+       set status = 'queued',
+           queued_at = now(),
+           request_id = v_request_id,
+           error = null
+     where id = v_delivery.id;
+
+    if v_delivery.event_id is not null then
+      update public.notification_events
+         set status = 'sent',
+             sent_at = now()
+       where id = v_delivery.event_id
+         and status in ('pending', 'failed');
+    end if;
+
+    v_count := v_count + 1;
+  end loop;
+  return v_count;
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_send_notification(
+  p_user_id uuid,
+  p_ea_id uuid,
+  p_event_type text,
+  p_event_key text,
+  p_text text,
+  p_payload jsonb default '{}'::jsonb
+)
+returns jsonb as $$
+declare
+  v_event_id bigint;
+  v_bot record;
+  v_delivery_count integer := 0;
+  v_send_after timestamptz;
+begin
+  insert into public.notification_events (
+    user_id,
+    ea_id,
+    event_type,
+    event_key,
+    payload,
+    status
+  )
+  values (
+    p_user_id,
+    p_ea_id,
+    p_event_type,
+    left(coalesce(p_event_key, gen_random_uuid()::text), 250),
+    coalesce(p_payload, '{}'::jsonb),
+    'pending'
+  )
+  on conflict (user_id, ea_id, event_type, event_key) do nothing
+  returning id into v_event_id;
+
+  if v_event_id is null then
+    return jsonb_build_object('ok', true, 'duplicate', true);
+  end if;
+
+  for v_bot in
+    select *
+    from public.telegram_bots
+    where user_id = p_user_id
+      and enabled = true
+      and public.tcx_telegram_pref_enabled(prefs, p_event_type)
+  loop
+    v_send_after := now() + make_interval(secs => greatest(0, least(3600, coalesce(v_bot.delay_seconds, 0))));
+
+    insert into public.telegram_deliveries (
+      event_id,
+      user_id,
+      ea_id,
+      bot_id,
+      event_type,
+      event_key,
+      message_text,
+      payload,
+      send_after,
+      status
+    )
+    values (
+      v_event_id,
+      p_user_id,
+      p_ea_id,
+      v_bot.id,
+      p_event_type,
+      left(coalesce(p_event_key, v_event_id::text), 250),
+      p_text,
+      coalesce(p_payload, '{}'::jsonb),
+      v_send_after,
+      'pending'
+    )
+    on conflict do nothing;
+
+    v_delivery_count := v_delivery_count + 1;
+  end loop;
+
+  if v_delivery_count = 0 then
+    update public.notification_events
+       set status = 'skipped'
+     where id = v_event_id;
+    return jsonb_build_object('ok', true, 'skipped', true);
+  end if;
+
+  perform public.tcx_telegram_dispatch_due(100);
+  return jsonb_build_object('ok', true, 'event_id', v_event_id, 'deliveries', v_delivery_count);
+exception when others then
+  return jsonb_build_object('ok', false, 'error', sqlerrm);
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_save_bot(
+  p_bot_id uuid default null,
+  p_label text default '',
+  p_bot_token text default '',
+  p_chat_id text default '',
+  p_enabled boolean default true,
+  p_prefs jsonb default null,
+  p_delay_seconds integer default 0,
+  p_test boolean default false
+)
+returns jsonb as $$
+declare
+  v_user_id uuid := (select auth.uid());
+  v_existing public.telegram_bots%rowtype;
+  v_bot public.telegram_bots%rowtype;
+  v_bot_id uuid := coalesce(p_bot_id, gen_random_uuid());
+  v_secret_id uuid;
+  v_token text := trim(coalesce(p_bot_token, ''));
+  v_chat_id text := trim(coalesce(p_chat_id, ''));
+  v_label text := left(coalesce(nullif(trim(p_label), ''), 'Telegram bot'), 80);
+  v_prefs jsonb := public.tcx_telegram_merge_prefs(p_prefs);
+  v_delay integer := greatest(0, least(3600, coalesce(p_delay_seconds, 0)));
+begin
+  if v_user_id is null then
+    return jsonb_build_object('ok', false, 'error', 'Unauthorized', 'status', 401);
+  end if;
+
+  if p_bot_id is not null then
+    select *
+      into v_existing
+    from public.telegram_bots
+    where id = p_bot_id
+      and user_id = v_user_id;
+
+    if not found then
+      return jsonb_build_object('ok', false, 'error', 'Telegram bot not found', 'status', 404);
+    end if;
+    v_secret_id := v_existing.bot_secret_id;
+  end if;
+
+  if coalesce(p_enabled, true) and v_chat_id = '' then
+    return jsonb_build_object('ok', false, 'error', 'Telegram chat ID is required', 'status', 400);
+  end if;
+
+  if v_token <> '' then
+    if v_secret_id is null then
+      v_secret_id := vault.create_secret(
+        v_token,
+        'tcx_telegram_bot_' || v_bot_id::text,
+        'TCX Telegram bot token'
+      );
+    else
+      perform vault.update_secret(v_secret_id, v_token, null, 'TCX Telegram bot token');
+    end if;
+  end if;
+
+  if v_secret_id is null then
+    return jsonb_build_object('ok', false, 'error', 'Telegram bot token is required', 'status', 400);
+  end if;
+
+  insert into public.telegram_bots (
+    id,
+    user_id,
+    label,
+    bot_secret_id,
+    chat_id,
+    enabled,
+    prefs,
+    delay_seconds,
+    connected_at,
+    updated_at
+  )
+  values (
+    v_bot_id,
+    v_user_id,
+    v_label,
+    v_secret_id,
+    v_chat_id,
+    coalesce(p_enabled, true),
+    v_prefs,
+    v_delay,
+    case when coalesce(p_enabled, true) then now() else null end,
+    now()
+  )
+  on conflict (id) do update
+     set label = excluded.label,
+         chat_id = excluded.chat_id,
+         enabled = excluded.enabled,
+         prefs = excluded.prefs,
+         delay_seconds = excluded.delay_seconds,
+         connected_at = case when excluded.enabled then coalesce(public.telegram_bots.connected_at, now()) else null end,
+         updated_at = now()
+   where public.telegram_bots.user_id = v_user_id
+  returning * into v_bot;
+
+  if p_test and v_bot.enabled then
+    insert into public.telegram_deliveries (
+      user_id,
+      bot_id,
+      event_type,
+      event_key,
+      message_text,
+      payload,
+      send_after,
+      status
+    )
+    values (
+      v_user_id,
+      v_bot.id,
+      'telegram_test',
+      'telegram-test:' || v_bot.id::text || ':' || extract(epoch from now())::text,
+      'TCX Telegram connected successfully. You will receive EA and trade updates here.',
+      '{}'::jsonb,
+      now(),
+      'pending'
+    );
+    perform public.tcx_telegram_dispatch_due(20);
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'bot', jsonb_build_object(
+      'id', v_bot.id,
+      'label', v_bot.label,
+      'chat_id', v_bot.chat_id,
+      'bot_username', coalesce(v_bot.bot_username, ''),
+      'enabled', v_bot.enabled,
+      'prefs', public.tcx_telegram_merge_prefs(v_bot.prefs),
+      'delay_seconds', v_bot.delay_seconds,
+      'connected_at', v_bot.connected_at,
+      'updated_at', v_bot.updated_at
+    )
+  );
+exception when others then
+  return jsonb_build_object('ok', false, 'error', sqlerrm, 'status', 500);
+end;
+$$ language plpgsql security definer set search_path = public, vault, net, extensions;
+
+create or replace function public.tcx_telegram_delete_bot(p_bot_id uuid)
+returns jsonb as $$
+declare
+  v_user_id uuid := (select auth.uid());
+  v_secret_id uuid;
+begin
+  if v_user_id is null then
+    return jsonb_build_object('ok', false, 'error', 'Unauthorized', 'status', 401);
+  end if;
+
+  delete from public.telegram_bots
+   where id = p_bot_id
+     and user_id = v_user_id
+  returning bot_secret_id into v_secret_id;
+
+  if v_secret_id is null then
+    return jsonb_build_object('ok', false, 'error', 'Telegram bot not found', 'status', 404);
+  end if;
+
+  delete from vault.secrets where id = v_secret_id;
+  return jsonb_build_object('ok', true);
+exception when others then
+  return jsonb_build_object('ok', false, 'error', sqlerrm, 'status', 500);
+end;
+$$ language plpgsql security definer set search_path = public, vault, extensions;
+
+create or replace function public.tcx_telegram_request_chat_id(p_bot_token text)
+returns jsonb as $$
+declare
+  v_user_id uuid := (select auth.uid());
+  v_token text := trim(coalesce(p_bot_token, ''));
+  v_request_id bigint;
+begin
+  if v_user_id is null then
+    return jsonb_build_object('ok', false, 'error', 'Unauthorized', 'status', 401);
+  end if;
+
+  if length(v_token) < 20 or position(':' in v_token) = 0 then
+    return jsonb_build_object('ok', false, 'error', 'Telegram bot token is required', 'status', 400);
+  end if;
+
+  delete from public.telegram_chat_fetch_requests
+   where user_id = v_user_id
+      or created_at < now() - interval '1 day';
+
+  select net.http_post(
+    url := 'https://api.telegram.org/bot' || v_token || '/getUpdates',
+    body := jsonb_build_object(
+      'limit', 20,
+      'allowed_updates', jsonb_build_array(
+        'message',
+        'edited_message',
+        'channel_post',
+        'edited_channel_post',
+        'my_chat_member'
+      )
+    ),
+    headers := '{"Content-Type":"application/json"}'::jsonb,
+    timeout_milliseconds := 5000
+  ) into v_request_id;
+
+  insert into public.telegram_chat_fetch_requests (request_id, user_id)
+  values (v_request_id, v_user_id);
+
+  return jsonb_build_object('ok', true, 'request_id', v_request_id);
+exception when others then
+  return jsonb_build_object('ok', false, 'error', sqlerrm, 'status', 500);
+end;
+$$ language plpgsql security definer set search_path = public, net, extensions;
+
+create or replace function public.tcx_telegram_read_chat_id(p_request_id bigint)
+returns jsonb as $$
+declare
+  v_user_id uuid := (select auth.uid());
+  v_response net._http_response%rowtype;
+  v_json jsonb;
+  v_update jsonb;
+  v_chat jsonb;
+  v_chat_id text;
+  v_chat_title text;
+  v_chat_username text;
+  v_chat_type text;
+begin
+  if v_user_id is null then
+    return jsonb_build_object('ok', false, 'error', 'Unauthorized', 'status', 401);
+  end if;
+
+  if p_request_id is null then
+    return jsonb_build_object('ok', false, 'error', 'Missing Telegram fetch request', 'status', 400);
+  end if;
+
+  perform 1
+    from public.telegram_chat_fetch_requests
+   where request_id = p_request_id
+     and user_id = v_user_id
+     and created_at > now() - interval '10 minutes';
+
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'Telegram fetch request expired. Try Fetch Chat ID again.', 'status', 404);
+  end if;
+
+  select *
+    into v_response
+    from net._http_response
+   where id = p_request_id;
+
+  if not found then
+    return jsonb_build_object('ok', true, 'pending', true);
+  end if;
+
+  if coalesce(v_response.timed_out, false) or nullif(v_response.error_msg, '') is not null then
+    return jsonb_build_object(
+      'ok', false,
+      'error', coalesce(nullif(v_response.error_msg, ''), 'Telegram request timed out'),
+      'status', 502
+    );
+  end if;
+
+  if coalesce(v_response.status_code, 0) < 200 or coalesce(v_response.status_code, 0) >= 300 then
+    return jsonb_build_object(
+      'ok', false,
+      'error', 'Telegram returned HTTP ' || coalesce(v_response.status_code::text, '0'),
+      'status', coalesce(v_response.status_code, 500)
+    );
+  end if;
+
+  v_json := public.tcx_try_jsonb(v_response.content);
+
+  if v_json is null then
+    return jsonb_build_object('ok', false, 'error', 'Telegram returned an unreadable response', 'status', 502);
+  end if;
+
+  if not coalesce((v_json ->> 'ok')::boolean, false) then
+    return jsonb_build_object(
+      'ok', false,
+      'error', coalesce(nullif(v_json ->> 'description', ''), 'Telegram rejected the bot token'),
+      'status', coalesce((v_json ->> 'error_code')::integer, 400)
+    );
+  end if;
+
+  for v_update in
+    select value
+      from jsonb_array_elements(coalesce(v_json -> 'result', '[]'::jsonb)) with ordinality as updates(value, item_index)
+     order by item_index desc
+  loop
+    v_chat := coalesce(
+      v_update #> '{message,chat}',
+      v_update #> '{edited_message,chat}',
+      v_update #> '{channel_post,chat}',
+      v_update #> '{edited_channel_post,chat}',
+      v_update #> '{my_chat_member,chat}'
+    );
+
+    if v_chat is not null and v_chat ? 'id' then
+      v_chat_id := v_chat ->> 'id';
+      v_chat_title := coalesce(v_chat ->> 'title', v_chat ->> 'first_name');
+      v_chat_username := v_chat ->> 'username';
+      v_chat_type := v_chat ->> 'type';
+      exit;
+    end if;
+  end loop;
+
+  if nullif(v_chat_id, '') is null then
+    return jsonb_build_object(
+      'ok', false,
+      'error', 'No chat found yet. Open Telegram, send any message to this bot, then click Fetch Chat ID again.',
+      'status', 404
+    );
+  end if;
+
+  delete from public.telegram_chat_fetch_requests
+   where request_id = p_request_id
+     and user_id = v_user_id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'pending', false,
+    'chat_id', v_chat_id,
+    'chat_title', coalesce(nullif(v_chat_title, ''), nullif(v_chat_username, ''), v_chat_type, ''),
+    'chat_username', coalesce(v_chat_username, ''),
+    'chat_type', coalesce(v_chat_type, '')
+  );
+exception when others then
+  return jsonb_build_object('ok', false, 'error', sqlerrm, 'status', 500);
+end;
+$$ language plpgsql security definer set search_path = public, net, extensions;
+
+revoke all on function public.tcx_telegram_default_prefs() from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_merge_prefs(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_pref_enabled(jsonb, text) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_to_numeric(text) from public;
+revoke all on function public.tcx_to_boolean(text) from public;
+revoke all on function public.tcx_try_jsonb(text) from public;
+revoke all on function public.tcx_num_text(numeric, integer) from public;
+revoke all on function public.tcx_money_text(numeric, text) from public;
+revoke all on function public.tcx_command_label(text) from public;
+revoke all on function public.tcx_telegram_ea_title(text, text, jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_position_key(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_reconcile_responses() from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_dispatch_due(integer) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_send_notification(uuid, uuid, text, text, text, jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_save_bot(uuid, text, text, text, boolean, jsonb, integer, boolean) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_delete_bot(uuid) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_request_chat_id(text) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_read_chat_id(bigint) from public, anon, authenticated, service_role;
+
+grant execute on function public.tcx_telegram_save_bot(uuid, text, text, text, boolean, jsonb, integer, boolean) to authenticated;
+grant execute on function public.tcx_telegram_delete_bot(uuid) to authenticated;
+grant execute on function public.tcx_telegram_request_chat_id(text) to authenticated;
+grant execute on function public.tcx_telegram_read_chat_id(bigint) to authenticated;
+
+create or replace function public.tcx_telegram_notify_command_created(p_command_id uuid)
+returns void as $$
+declare
+  v_cmd public.commands%rowtype;
+  v_ea public.ea_instances%rowtype;
+  v_text text;
+  v_details text;
+begin
+  select * into v_cmd from public.commands where id = p_command_id;
+  if not found then
+    return;
+  end if;
+
+  select * into v_ea from public.ea_instances where id = v_cmd.ea_id;
+  if not found then
+    return;
+  end if;
+
+  v_details := case when coalesce(v_cmd.payload, '{}'::jsonb) = '{}'::jsonb then null else v_cmd.payload::text end;
+  v_text := array_to_string(array_remove(array[
+    'Command Sent',
+    '',
+    'EA: ' || coalesce(v_ea.name, 'EA'),
+    'Action: ' || public.tcx_command_label(v_cmd.action),
+    case when v_details is not null then 'Details: ' || v_details else null end
+  ], null), E'\n');
+
+  perform public.tcx_telegram_send_notification(
+    v_cmd.user_id,
+    v_cmd.ea_id,
+    'command_sent',
+    'command-sent:' || v_cmd.id::text,
+    v_text,
+    jsonb_build_object('command_id', v_cmd.id, 'action', v_cmd.action, 'payload', coalesce(v_cmd.payload, '{}'::jsonb))
+  );
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_notify_command_ack(p_command_id uuid)
+returns void as $$
+declare
+  v_cmd public.commands%rowtype;
+  v_ea public.ea_instances%rowtype;
+  v_type text;
+  v_title text;
+  v_text text;
+begin
+  select * into v_cmd from public.commands where id = p_command_id;
+  if not found or v_cmd.status not in ('done', 'failed') then
+    return;
+  end if;
+
+  select * into v_ea from public.ea_instances where id = v_cmd.ea_id;
+  if not found then
+    return;
+  end if;
+
+  v_type := case when v_cmd.status = 'failed' then 'command_failed' else 'command_done' end;
+  v_title := case when v_cmd.status = 'failed' then 'Command Failed' else 'Command Done' end;
+  v_text := array_to_string(array_remove(array[
+    v_title,
+    '',
+    'EA: ' || coalesce(v_ea.name, 'EA'),
+    'Action: ' || public.tcx_command_label(v_cmd.action),
+    'Status: ' || upper(v_cmd.status),
+    case when coalesce(v_cmd.result_message, '') <> '' then 'Message: ' || v_cmd.result_message else null end
+  ], null), E'\n');
+
+  perform public.tcx_telegram_send_notification(
+    v_cmd.user_id,
+    v_cmd.ea_id,
+    v_type,
+    'command-ack:' || v_cmd.id::text || ':' || v_cmd.status,
+    v_text,
+    jsonb_build_object('command_id', v_cmd.id, 'action', v_cmd.action, 'status', v_cmd.status, 'message', coalesce(v_cmd.result_message, ''))
+  );
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_notify_ea_online(
+  p_ea_id uuid,
+  p_state jsonb,
+  p_now timestamptz default now()
+)
+returns void as $$
+declare
+  v_ea public.ea_instances%rowtype;
+  v_was_online boolean := false;
+  v_text text;
+begin
+  select * into v_ea from public.ea_instances where id = p_ea_id;
+  if not found then
+    return;
+  end if;
+
+  select coalesce(is_online, false)
+    into v_was_online
+  from public.telegram_ea_status
+  where ea_id = p_ea_id;
+
+  if not coalesce(v_was_online, false) then
+    v_text := array_to_string(array[
+      'EA Online',
+      '',
+      'EA: ' || public.tcx_telegram_ea_title(v_ea.name, v_ea.symbol, coalesce(p_state, '{}'::jsonb)),
+      'Account: ' || coalesce(nullif(p_state ->> 'accountLogin', ''), v_ea.account_login, '--'),
+      'Time: ' || coalesce(nullif(p_state ->> 'serverTime', ''), p_now::text)
+    ], E'\n');
+
+    perform public.tcx_telegram_send_notification(
+      v_ea.user_id,
+      v_ea.id,
+      'ea_online',
+      'online:' || v_ea.id::text || ':' || to_char(p_now, 'YYYY-MM-DD HH24:MI'),
+      v_text,
+      jsonb_build_object('state', coalesce(p_state, '{}'::jsonb))
+    );
+  end if;
+
+  insert into public.telegram_ea_status (
+    ea_id,
+    user_id,
+    is_online,
+    last_online_at,
+    updated_at
+  )
+  values (
+    v_ea.id,
+    v_ea.user_id,
+    true,
+    p_now,
+    p_now
+  )
+  on conflict (ea_id) do update
+     set is_online = true,
+         last_online_at = excluded.last_online_at,
+         updated_at = excluded.updated_at;
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_mark_offline(p_offline_after_seconds integer default 45)
+returns integer as $$
+declare
+  v_ea record;
+  v_now timestamptz := now();
+  v_count integer := 0;
+  v_text text;
+begin
+  for v_ea in
+    select ea.*
+    from public.ea_instances ea
+    join public.telegram_ea_status st on st.ea_id = ea.id
+    where ea.enabled = true
+      and st.is_online = true
+      and ea.last_seen_at is not null
+      and ea.last_seen_at < v_now - make_interval(secs => greatest(15, coalesce(p_offline_after_seconds, 45)))
+    limit 200
+  loop
+    v_text := array_to_string(array[
+      'EA Offline',
+      '',
+      'EA: ' || coalesce(v_ea.name, 'EA'),
+      'Symbol: ' || coalesce(v_ea.symbol, '--'),
+      'Account: ' || coalesce(v_ea.account_login, '--'),
+      'Last seen: ' || coalesce(v_ea.last_seen_at::text, '--')
+    ], E'\n');
+
+    perform public.tcx_telegram_send_notification(
+      v_ea.user_id,
+      v_ea.id,
+      'ea_offline',
+      'offline:' || v_ea.id::text || ':' || coalesce(v_ea.last_seen_at::text, v_now::text),
+      v_text,
+      jsonb_build_object('last_seen_at', v_ea.last_seen_at)
+    );
+
+    update public.telegram_ea_status
+       set is_online = false,
+           last_offline_at = v_now,
+           updated_at = v_now
+     where ea_id = v_ea.id;
+
+    v_count := v_count + 1;
+  end loop;
+  return v_count;
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_notify_state_changes(
+  p_ea_id uuid,
+  p_previous jsonb,
+  p_current jsonb,
+  p_now timestamptz default now()
+)
+returns void as $$
+declare
+  v_ea public.ea_instances%rowtype;
+  v_prev jsonb := coalesce(p_previous, '{}'::jsonb);
+  v_curr jsonb := coalesce(p_current, '{}'::jsonb);
+  v_prev_pos jsonb := coalesce(v_prev -> 'position', '{}'::jsonb);
+  v_curr_pos jsonb := coalesce(v_curr -> 'position', '{}'::jsonb);
+  v_prev_has boolean := coalesce(public.tcx_to_boolean(v_prev_pos ->> 'hasPosition'), false);
+  v_curr_has boolean := coalesce(public.tcx_to_boolean(v_curr_pos ->> 'hasPosition'), false);
+  v_prev_msg text := trim(coalesce(v_prev ->> 'message', ''));
+  v_curr_msg text := trim(coalesce(v_curr ->> 'message', ''));
+  v_symbol text;
+  v_currency text := coalesce(v_curr ->> 'currency', '');
+  v_key text;
+  v_text text;
+  v_prev_rr numeric;
+  v_curr_rr numeric;
+  v_prev_vol numeric;
+  v_curr_vol numeric;
+  v_closed_vol numeric;
+  v_level integer;
+  v_prev_history jsonb;
+  v_curr_history jsonb;
+  v_trade jsonb;
+  v_row_id text;
+  v_reason text;
+  v_event_type text;
+  v_title text;
+begin
+  if p_previous is null then
+    return;
+  end if;
+
+  select * into v_ea from public.ea_instances where id = p_ea_id;
+  if not found then
+    return;
+  end if;
+
+  v_symbol := coalesce(nullif(v_curr ->> 'symbol', ''), v_ea.symbol, '--');
+  v_key := public.tcx_telegram_position_key(v_curr);
+
+  if v_curr_msg <> '' and v_curr_msg is distinct from v_prev_msg then
+    v_text := array_to_string(array[
+      'EA Message',
+      '',
+      'EA: ' || public.tcx_telegram_ea_title(v_ea.name, v_ea.symbol, v_curr),
+      'Status: ' || coalesce(nullif(v_curr ->> 'status', ''), '--'),
+      'Arm: ' || coalesce(nullif(v_curr ->> 'arm', ''), '--'),
+      'Message: ' || v_curr_msg
+    ], E'\n');
+
+    perform public.tcx_telegram_send_notification(
+      v_ea.user_id,
+      v_ea.id,
+      'ea_message',
+      'ea-message:' || p_now::text || ':' || md5(v_curr_msg),
+      v_text,
+      jsonb_build_object('message', v_curr_msg, 'status', v_curr ->> 'status', 'arm', v_curr ->> 'arm')
+    );
+  end if;
+
+  if v_curr_has and not v_prev_has then
+    v_text := array_to_string(array[
+      'Trade Opened',
+      '',
+      'EA: ' || public.tcx_telegram_ea_title(v_ea.name, v_ea.symbol, v_curr),
+      'Symbol: ' || v_symbol,
+      'Type: ' || coalesce(nullif(v_curr_pos ->> 'type', ''), '--'),
+      'Volume: ' || public.tcx_num_text(public.tcx_to_numeric(v_curr_pos ->> 'volume'), 2),
+      '',
+      'Entry Price: ' || coalesce(nullif(v_curr_pos ->> 'entry', ''), '--'),
+      'SL Price: ' || coalesce(nullif(v_curr_pos ->> 'sl', ''), '--'),
+      'TP Price: ' || coalesce(nullif(v_curr_pos ->> 'tp', ''), '--'),
+      'RR: 1:' || public.tcx_num_text(public.tcx_to_numeric(v_curr ->> 'rr'), 1),
+      '',
+      'Account: ' || coalesce(nullif(v_curr ->> 'accountLogin', ''), '--')
+    ], E'\n');
+
+    perform public.tcx_telegram_send_notification(
+      v_ea.user_id,
+      v_ea.id,
+      'trade_open',
+      'trade-open:' || v_key,
+      v_text,
+      jsonb_build_object('position', v_curr_pos, 'state', v_curr)
+    );
+  end if;
+
+  if v_curr_has then
+    v_prev_rr := public.tcx_to_numeric(v_prev_pos ->> 'rr');
+    v_curr_rr := public.tcx_to_numeric(v_curr_pos ->> 'rr');
+
+    if v_curr_rr is not null then
+      for v_level in 1..3
+      loop
+        if (v_prev_rr is null or v_prev_rr < v_level) and v_curr_rr >= v_level then
+          v_text := array_to_string(array[
+            '1:' || v_level::text || ' Reached',
+            '',
+            'EA: ' || public.tcx_telegram_ea_title(v_ea.name, v_ea.symbol, v_curr),
+            'Symbol: ' || v_symbol,
+            'Type: ' || coalesce(nullif(v_curr_pos ->> 'type', ''), '--'),
+            'Entry: ' || coalesce(nullif(v_curr_pos ->> 'entry', ''), '--'),
+            'SL: ' || coalesce(nullif(v_curr_pos ->> 'sl', ''), '--'),
+            'TP: ' || coalesce(nullif(v_curr_pos ->> 'tp', ''), '--'),
+            'Current RR: ' || public.tcx_num_text(v_curr_rr, 2) || 'R',
+            'Open P/L: ' || public.tcx_money_text(public.tcx_to_numeric(v_curr_pos ->> 'profit'), v_currency)
+          ], E'\n');
+
+          perform public.tcx_telegram_send_notification(
+            v_ea.user_id,
+            v_ea.id,
+            'rr' || v_level::text || '_hit',
+            'rr' || v_level::text || ':' || v_key,
+            v_text,
+            jsonb_build_object('level', v_level, 'position', v_curr_pos)
+          );
+        end if;
+      end loop;
+    end if;
+
+    v_prev_vol := public.tcx_to_numeric(v_prev_pos ->> 'volume');
+    v_curr_vol := public.tcx_to_numeric(v_curr_pos ->> 'volume');
+    if v_prev_vol is not null and v_curr_vol is not null and v_curr_vol > 0 and v_prev_vol > v_curr_vol then
+      v_closed_vol := v_prev_vol - v_curr_vol;
+      v_text := array_to_string(array[
+        'Partial Booked',
+        '',
+        'EA: ' || public.tcx_telegram_ea_title(v_ea.name, v_ea.symbol, v_curr),
+        'Symbol: ' || v_symbol,
+        'Closed Volume: ' || public.tcx_num_text(v_closed_vol, 2),
+        'Remaining Volume: ' || public.tcx_num_text(v_curr_vol, 2),
+        'Current RR: ' || public.tcx_num_text(public.tcx_to_numeric(v_curr_pos ->> 'rr'), 2) || 'R'
+      ], E'\n');
+
+      perform public.tcx_telegram_send_notification(
+        v_ea.user_id,
+        v_ea.id,
+        'partial_hit',
+        'partial:' || v_key || ':' || public.tcx_num_text(v_prev_vol, 2) || '-' || public.tcx_num_text(v_curr_vol, 2),
+        v_text,
+        jsonb_build_object('previous_volume', v_prev_vol, 'current_volume', v_curr_vol)
+      );
+    end if;
+  end if;
+
+  v_prev_history := case when jsonb_typeof(v_prev -> 'tradeHistory') = 'array' then v_prev -> 'tradeHistory' else '[]'::jsonb end;
+  v_curr_history := case when jsonb_typeof(v_curr -> 'tradeHistory') = 'array' then v_curr -> 'tradeHistory' else '[]'::jsonb end;
+
+  for v_trade in select value from jsonb_array_elements(v_curr_history)
+  loop
+    v_row_id := coalesce(nullif(v_trade ->> 'id', ''), nullif(v_trade ->> 'positionId', ''), '');
+    if v_row_id = '' then
+      continue;
+    end if;
+
+    if exists (
+      select 1
+      from jsonb_array_elements(v_prev_history) prev_trade(value)
+      where coalesce(nullif(prev_trade.value ->> 'id', ''), nullif(prev_trade.value ->> 'positionId', ''), '') = v_row_id
+    ) then
+      continue;
+    end if;
+
+    v_reason := upper(coalesce(v_trade ->> 'reason', ''));
+    if v_reason not in ('SL', 'TP') then
+      continue;
+    end if;
+
+    v_event_type := case when v_reason = 'SL' then 'sl_hit' else 'tp_hit' end;
+    v_title := case when v_reason = 'SL' then 'SL Hit' else 'TP Hit' end;
+    v_text := array_to_string(array[
+      v_title,
+      '',
+      'EA: ' || public.tcx_telegram_ea_title(v_ea.name, v_ea.symbol, v_curr),
+      'Symbol: ' || v_symbol,
+      'Type: ' || coalesce(nullif(v_trade ->> 'type', ''), '--'),
+      'Entry: ' || coalesce(nullif(v_trade ->> 'entryPrice', ''), '--'),
+      'Exit: ' || coalesce(nullif(v_trade ->> 'exitPrice', ''), '--'),
+      v_reason || ': ' || coalesce(nullif(case when v_reason = 'SL' then v_trade ->> 'sl' else v_trade ->> 'tp' end, ''), '--'),
+      'P/L: ' || public.tcx_money_text(public.tcx_to_numeric(v_trade ->> 'profit'), v_currency),
+      'Reason: ' || coalesce(nullif(v_trade ->> 'reason', ''), '--')
+    ], E'\n');
+
+    perform public.tcx_telegram_send_notification(
+      v_ea.user_id,
+      v_ea.id,
+      v_event_type,
+      v_event_type || ':' || v_row_id,
+      v_text,
+      jsonb_build_object('trade', v_trade)
+    );
+  end loop;
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_commands_after_insert()
+returns trigger as $$
+begin
+  perform public.tcx_telegram_notify_command_created(new.id);
+  return new;
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_commands_after_update()
+returns trigger as $$
+begin
+  if new.status in ('done', 'failed') and new.status is distinct from old.status then
+    perform public.tcx_telegram_notify_command_ack(new.id);
+  end if;
+  return new;
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_ea_states_after_change()
+returns trigger as $$
+begin
+  perform public.tcx_telegram_notify_ea_online(new.ea_id, new.state, coalesce(new.updated_at, now()));
+  if tg_op = 'UPDATE' and new.state is distinct from old.state then
+    perform public.tcx_telegram_notify_state_changes(new.ea_id, old.state, new.state, coalesce(new.updated_at, now()));
+  end if;
+  return new;
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+create or replace function public.tcx_telegram_worker()
+returns void as $$
+begin
+  perform public.tcx_telegram_reconcile_responses();
+  perform public.tcx_telegram_dispatch_due(200);
+  perform public.tcx_telegram_mark_offline(45);
+end;
+$$ language plpgsql security definer set search_path = public, net, vault, extensions;
+
+revoke all on function public.tcx_telegram_notify_command_created(uuid) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_notify_command_ack(uuid) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_notify_ea_online(uuid, jsonb, timestamptz) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_mark_offline(integer) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_notify_state_changes(uuid, jsonb, jsonb, timestamptz) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_commands_after_insert() from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_commands_after_update() from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_ea_states_after_change() from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_worker() from public, anon, authenticated, service_role;
+
+drop trigger if exists tcx_telegram_commands_after_insert on public.commands;
+create trigger tcx_telegram_commands_after_insert
+  after insert on public.commands
+  for each row execute function public.tcx_telegram_commands_after_insert();
+
+drop trigger if exists tcx_telegram_commands_after_update on public.commands;
+create trigger tcx_telegram_commands_after_update
+  after update of status on public.commands
+  for each row execute function public.tcx_telegram_commands_after_update();
+
+drop trigger if exists tcx_telegram_ea_states_after_change on public.ea_states;
+create trigger tcx_telegram_ea_states_after_change
+  after insert or update of state on public.ea_states
+  for each row execute function public.tcx_telegram_ea_states_after_change();
+
+do $$
+begin
+  if exists (select 1 from cron.job where jobname = 'tcx-telegram-worker') then
+    perform cron.unschedule('tcx-telegram-worker');
+  end if;
+end $$;
+
+select cron.schedule(
+  'tcx-telegram-worker',
+  '5 seconds',
+  $$select public.tcx_telegram_worker();$$
+);

@@ -8,6 +8,8 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   BarChart3,
+  Bell,
+  Bot,
   ChevronDown,
   CheckCircle2,
   CircleDot,
@@ -30,6 +32,7 @@ import {
   Radio,
   RefreshCw,
   Save,
+  Send,
   Server,
   Settings2,
   Shield,
@@ -68,6 +71,24 @@ const MULTI_LIVE_POLL_MS = 2000
 const EA_ONLINE_WINDOW_MS = 30000
 const CONTROL_OPTIMISTIC_MS = 12000
 const CONTROL_KEYS = ['partialsOn', 'secondEntryOn', 'thirdEntryOn']
+
+const TELEGRAM_PREF_ITEMS = [
+  { key: 'trade_open', label: 'Trade Open' },
+  { key: 'sl_hit', label: 'SL Hit' },
+  { key: 'tp_hit', label: 'TP Hit' },
+  { key: 'rr1_hit', label: 'RR 1 Hit' },
+  { key: 'rr2_hit', label: 'RR 2 Hit' },
+  { key: 'rr3_hit', label: 'RR 3 Hit' },
+  { key: 'partial_hit', label: 'Partial Hit' },
+  { key: 'command_sent', label: 'Command Sent' },
+  { key: 'command_done', label: 'Command Done' },
+  { key: 'command_failed', label: 'Command Failed' },
+  { key: 'ea_message', label: 'EA Message' },
+  { key: 'ea_online', label: 'EA Online' },
+  { key: 'ea_offline', label: 'EA Offline' }
+]
+
+const TELEGRAM_DEFAULT_PREFS = TELEGRAM_PREF_ITEMS.reduce((prefs, item) => ({ ...prefs, [item.key]: true }), {})
 
 const RULE_COMPANIES = [
   { id: 'fundingpips', label: 'FundingPips', hasRules: true },
@@ -563,6 +584,28 @@ function uid() {
   return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()
 }
 
+function telegramPrefs(prefs) {
+  const next = { ...TELEGRAM_DEFAULT_PREFS }
+  if (prefs && typeof prefs === 'object' && !Array.isArray(prefs)) {
+    for (const item of TELEGRAM_PREF_ITEMS) {
+      if (typeof prefs[item.key] === 'boolean') next[item.key] = prefs[item.key]
+    }
+  }
+  return next
+}
+
+function emptyTelegramBotForm() {
+  return {
+    id: null,
+    label: 'Main Telegram',
+    bot_token: '',
+    chat_id: '',
+    enabled: true,
+    delay_seconds: 0,
+    prefs: { ...TELEGRAM_DEFAULT_PREFS }
+  }
+}
+
 function mergeCommandRows(rows, row) {
   if (!row?.id) return rows
   return [row, ...rows.filter(c => c.id !== row.id)]
@@ -746,7 +789,6 @@ function EASetup({ user, onCreated, onDone }) {
             <CopyRow label="InpSupabaseEaToken" value={created.token} />
             <CopyRow label="InpSupabaseProjectUrl" value={`${import.meta.env.VITE_SUPABASE_URL || 'https://PROJECT_REF.supabase.co'}`} />
             <CopyRow label="InpSupabaseAnonKey" value={`${import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'}`} />
-            <CopyRow label="InpSupabaseFunctionsUrl" value={`${import.meta.env.VITE_SUPABASE_URL?.replace('.supabase.co', '.functions.supabase.co') || 'https://PROJECT_REF.functions.supabase.co'}`} />
             <div className="dangerText"><AlertTriangle size={18} /> Save the token now. It is shown only once.</div>
             <button className="primaryBtn fullBtn" onClick={() => onDone?.()}>Go To Dashboard</button>
           </div>
@@ -855,6 +897,13 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
   })
   const [editName, setEditName] = useState('')
   const [editSymbol, setEditSymbol] = useState('')
+  const navItems = [
+    { id: 'dashboard', label: 'Dashboard', title: 'Dashboard', icon: <Activity size={18} /> },
+    { id: 'accounts', label: 'Accounts', title: 'All accounts', icon: <WalletCards size={18} /> },
+    { id: 'history', label: 'Trades', title: 'Trade history', icon: <History size={18} /> },
+    { id: 'rules', label: 'Rules', title: 'Funding rules', icon: <ListChecks size={18} /> },
+    { id: 'settings', label: 'Settings', title: 'Settings', icon: <Settings2 size={18} /> }
+  ]
 
   const selected = instances.find(x => x.id === selectedId)
 
@@ -887,10 +936,22 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
     })
   }
 
+  function selectView(nextView) {
+    setView(nextView)
+    if (window.innerWidth <= 860) {
+      setMenuOpen(false)
+      try {
+        window.localStorage.setItem('tcx-topbar-open', 'false')
+      } catch {
+        // Ignore storage failures.
+      }
+    }
+  }
+
   return (
     <header className={`topbar glass ${menuOpen ? 'open' : 'topbarClosed'}`}>
-      <div className="topbarLeft">
-        <div className="brand">
+      <div className="sidebarHeader">
+        <div className="brand" title="TCX Pro">
           <div className="logo"><Zap size={22} /></div>
           <div className="brandText">
             <h2>TCX Pro</h2>
@@ -903,11 +964,13 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
               )}
             </div>
           </div>
-          <button type="button" className="topbarCollapseBtn" onClick={toggleMenuOpen} title={menuOpen ? 'Minimize menu' : 'Maximize menu'} aria-expanded={menuOpen}>
-            <ChevronDown size={18} />
-          </button>
         </div>
+        <button type="button" className="topbarCollapseBtn" onClick={toggleMenuOpen} title={menuOpen ? 'Collapse sidebar' : 'Expand sidebar'} aria-expanded={menuOpen}>
+          <ChevronDown size={18} />
+        </button>
+      </div>
 
+      <div className="sidebarAccount">
         <div className={`topbarSelect ${isEditing ? 'editing' : ''}`}>
           {isEditing ? (
             <>
@@ -928,14 +991,22 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
         </div>
       </div>
 
+      <div className="viewToggle" role="navigation" aria-label="Dashboard view">
+        {navItems.map(item => (
+          <button
+            key={item.id}
+            className={view === item.id ? 'active' : ''}
+            onClick={() => selectView(item.id)}
+            title={item.title}
+            aria-current={view === item.id ? 'page' : undefined}
+          >
+            {item.icon}
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="topbarActions">
-        <div className="viewToggle" role="group" aria-label="Dashboard view">
-          <button className={view === 'dashboard' ? 'active' : ''} onClick={() => setView('dashboard')} title="Dashboard"><Activity size={16} /> Dashboard</button>
-          <button className={view === 'accounts' ? 'active' : ''} onClick={() => setView('accounts')} title="All accounts"><WalletCards size={16} /> Accounts</button>
-          <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')} title="Trade history"><History size={16} /> Trades</button>
-          <button className={view === 'rules' ? 'active' : ''} onClick={() => setView('rules')} title="Funding rules"><ListChecks size={16} /> Rules</button>
-          <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')} title="Settings"><Settings2 size={16} /> Settings</button>
-        </div>
         <div className="syncBadge" title="Dashboard polls live data every 0.5 seconds and also listens for realtime updates">
           <span className="liveDot" />
           <span>live sync</span>
@@ -1956,6 +2027,238 @@ function AccountCommandsCompact({ commands }) {
   )
 }
 
+function TelegramSettingsPanel() {
+  const [bots, setBots] = useState([])
+  const [form, setForm] = useState(() => emptyTelegramBotForm())
+  const [saving, setSaving] = useState('')
+  const [message, setMessage] = useState('')
+
+  const activeCount = bots.filter(bot => bot.enabled).length
+  const selectedBot = form.id ? bots.find(bot => bot.id === form.id) : null
+  const busy = Boolean(saving)
+
+  const loadBots = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('telegram_bots')
+      .select('id,label,chat_id,bot_username,enabled,prefs,delay_seconds,connected_at,updated_at,created_at')
+      .order('created_at', { ascending: false })
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+    setBots((data || []).map(bot => ({ ...bot, prefs: telegramPrefs(bot.prefs) })))
+  }, [])
+
+  useEffect(() => { loadBots() }, [loadBots])
+
+  function updateForm(key, value) {
+    setForm(current => ({ ...current, [key]: value }))
+  }
+
+  function updatePref(key, value) {
+    setForm(current => ({ ...current, prefs: { ...telegramPrefs(current.prefs), [key]: value } }))
+  }
+
+  function editBot(bot) {
+    setForm({
+      id: bot.id,
+      label: bot.label || 'Telegram bot',
+      bot_token: '',
+      chat_id: bot.chat_id || '',
+      enabled: Boolean(bot.enabled),
+      delay_seconds: Number(bot.delay_seconds || 0),
+      prefs: telegramPrefs(bot.prefs)
+    })
+    setMessage('')
+  }
+
+  function newBot() {
+    setForm(emptyTelegramBotForm())
+    setMessage('')
+  }
+
+  async function saveBot(test = false) {
+    const isNew = !form.id
+    if (isNew && !form.bot_token.trim()) return setMessage('Telegram bot token is required.')
+    if (form.enabled && !form.chat_id.trim()) return setMessage('Telegram chat ID is required.')
+    setSaving(test ? 'test' : 'save')
+    setMessage('')
+    try {
+      const { data, error } = await supabase.rpc('tcx_telegram_save_bot', {
+        p_bot_id: form.id || null,
+        p_label: form.label,
+        p_bot_token: form.bot_token,
+        p_chat_id: form.chat_id,
+        p_enabled: form.enabled,
+        p_prefs: telegramPrefs(form.prefs),
+        p_delay_seconds: Number(form.delay_seconds || 0),
+        p_test: test
+      })
+      if (error) throw error
+      if (!data?.ok) throw new Error(data?.error || 'Telegram save failed')
+      await loadBots()
+      setForm(current => ({ ...current, id: data.bot?.id || current.id, bot_token: '' }))
+      setMessage(test ? 'Telegram test queued.' : 'Telegram bot saved.')
+    } catch (error) {
+      setMessage(error.message || 'Telegram save failed')
+    } finally {
+      setSaving('')
+    }
+  }
+
+  async function fetchChatId() {
+    if (!form.bot_token.trim()) return setMessage('Enter Telegram bot token first.')
+    setSaving('fetch')
+    setMessage('')
+    try {
+      const { data, error } = await supabase.rpc('tcx_telegram_request_chat_id', {
+        p_bot_token: form.bot_token.trim()
+      })
+      if (error) throw error
+      if (!data?.ok) throw new Error(data?.error || 'Telegram fetch failed')
+
+      let result = null
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 450 : 700))
+        const { data: readData, error: readError } = await supabase.rpc('tcx_telegram_read_chat_id', {
+          p_request_id: data.request_id
+        })
+        if (readError) throw readError
+        if (readData?.pending) continue
+        if (!readData?.ok) throw new Error(readData?.error || 'Telegram chat ID not found')
+        result = readData
+        break
+      }
+
+      if (!result) throw new Error('Telegram did not answer yet. Send any message to this bot and click Fetch Chat ID again.')
+
+      const title = result.chat_title || result.chat_username || ''
+      setForm(current => ({
+        ...current,
+        chat_id: String(result.chat_id || current.chat_id),
+        label: current.label || title || 'Telegram bot'
+      }))
+      setMessage(title ? `Chat ID fetched for ${title}.` : 'Chat ID fetched.')
+    } catch (error) {
+      setMessage(error.message || 'Telegram chat ID fetch failed')
+    } finally {
+      setSaving('')
+    }
+  }
+
+  async function deleteBot() {
+    if (!form.id) return
+    if (!window.confirm(`Remove ${form.label || 'this Telegram bot'}?`)) return
+    setSaving('delete')
+    setMessage('')
+    try {
+      const { data, error } = await supabase.rpc('tcx_telegram_delete_bot', { p_bot_id: form.id })
+      if (error) throw error
+      if (!data?.ok) throw new Error(data?.error || 'Telegram delete failed')
+      await loadBots()
+      newBot()
+      setMessage('Telegram bot removed.')
+    } catch (error) {
+      setMessage(error.message || 'Telegram delete failed')
+    } finally {
+      setSaving('')
+    }
+  }
+
+  return (
+    <div className="glass panel telegramPanel">
+      <div className="panelHeader settingsHeader">
+        <div className="panelIcon"><Bell /></div>
+        <div>
+          <p className="sectionEyebrow">Database Telegram</p>
+          <h2>Telegram Alerts</h2>
+        </div>
+        <div className={`telegramStatus ${activeCount ? 'connected' : ''}`}>{activeCount ? `${activeCount} Active` : 'Off'}</div>
+      </div>
+
+      <div className="telegramManager">
+        <div className="telegramBotList">
+          <button className={`telegramBotCard ${!form.id ? 'active' : ''}`} onClick={newBot}>
+            <span><Plus size={16} /></span>
+            <strong>Add Bot</strong>
+            <small>New connection</small>
+          </button>
+          {bots.map(bot => (
+            <button className={`telegramBotCard ${form.id === bot.id ? 'active' : ''}`} key={bot.id} onClick={() => editBot(bot)}>
+              <span><Bot size={16} /></span>
+              <strong>{bot.label || 'Telegram bot'}</strong>
+              <small>{bot.enabled ? 'Enabled' : 'Paused'} · {bot.delay_seconds ? `${bot.delay_seconds}s delay` : 'Instant'}</small>
+            </button>
+          ))}
+        </div>
+
+        <div className="telegramEditor">
+          <div className="telegramEditorHeader">
+            <div>
+              <strong>{form.id ? form.label || 'Telegram bot' : 'New Telegram bot'}</strong>
+              <span>{selectedBot?.bot_username ? `@${selectedBot.bot_username}` : form.enabled ? 'Enabled' : 'Paused'}</span>
+            </div>
+            <span className="telegramMiniBadge">{form.delay_seconds ? `${form.delay_seconds}s` : 'Instant'}</span>
+          </div>
+
+          <div className="telegramFormGrid">
+            <label>
+              Bot Name
+              <input value={form.label} onChange={e => updateForm('label', e.target.value)} placeholder="Main Telegram" />
+            </label>
+            <label>
+              Delay Seconds
+              <input type="number" min="0" max="3600" step="1" value={form.delay_seconds} onChange={e => updateForm('delay_seconds', e.target.value)} />
+            </label>
+            <label className="telegramWideField">
+              Bot Token
+              <input type="password" value={form.bot_token} onChange={e => updateForm('bot_token', e.target.value)} placeholder={selectedBot ? 'Saved token unchanged' : '123456:ABC'} />
+            </label>
+            <label className="telegramWideField">
+              Chat ID
+              <div className="telegramInputAction">
+                <input value={form.chat_id} onChange={e => updateForm('chat_id', e.target.value)} placeholder="-1001234567890" />
+                <button type="button" className="ghostBtn fetchChatBtn" onClick={fetchChatId} disabled={busy || !form.bot_token.trim()}>
+                  <RefreshCw size={15} className={saving === 'fetch' ? 'spin' : ''} /> {saving === 'fetch' ? 'Fetching...' : 'Fetch Chat ID'}
+                </button>
+              </div>
+            </label>
+          </div>
+
+          <label className="toggleLine telegramEnableLine">
+            <input type="checkbox" checked={form.enabled} onChange={e => updateForm('enabled', e.target.checked)} />
+            <span>Enabled</span>
+          </label>
+
+          <div className="telegramPrefHeader">
+            <strong>Send These Alerts</strong>
+            <div className="telegramQuickBtns">
+              <button type="button" className="ghostBtn compactBtn" onClick={() => updateForm('prefs', { ...TELEGRAM_DEFAULT_PREFS })}>All</button>
+              <button type="button" className="ghostBtn compactBtn" onClick={() => updateForm('prefs', Object.fromEntries(TELEGRAM_PREF_ITEMS.map(item => [item.key, false])))}>None</button>
+            </div>
+          </div>
+
+          <div className="prefGrid telegramPrefGrid">
+            {TELEGRAM_PREF_ITEMS.map(item => (
+              <label className="prefItem" key={item.key}>
+                <input type="checkbox" checked={Boolean(telegramPrefs(form.prefs)[item.key])} onChange={e => updatePref(item.key, e.target.checked)} />
+                <span>{item.label}</span>
+              </label>
+            ))}
+          </div>
+
+          <div className="telegramActions">
+            <button className="primaryBtn" onClick={() => saveBot(false)} disabled={busy}><Save size={16} /> {saving === 'save' ? 'Saving...' : 'Save Bot'}</button>
+            <button className="ghostBtn" onClick={() => saveBot(true)} disabled={busy}><Send size={16} /> {saving === 'test' ? 'Sending...' : 'Save & Test'}</button>
+            {form.id && <button className="ghostBtn dangerGhost" onClick={deleteBot} disabled={busy}><Trash2 size={16} /> Remove</button>}
+          </div>
+          {message && <div className={`notice ${message.toLowerCase().includes('failed') || message.toLowerCase().includes('required') || message.toLowerCase().includes('not found') || message.toLowerCase().includes('rejected') ? 'errorNotice' : ''}`}>{message}</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ConnectionSettingsPage() {
   const projectUrl = SUPABASE_URL || 'https://YOUR_PROJECT_REF.supabase.co'
   const anonKey = SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'
@@ -2009,6 +2312,7 @@ function ConnectionSettingsPage() {
           </div>
         </div>
       </div>
+      <TelegramSettingsPanel />
     </section>
   )
 }

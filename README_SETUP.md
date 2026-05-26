@@ -80,7 +80,7 @@ For Vercel: Project Settings -> Environment Variables -> add both values for Pro
 
 For Netlify: Site configuration -> Environment variables -> add both values -> Trigger deploy.
 
-Do not add `SUPABASE_SERVICE_ROLE_KEY` to the web app. That key is only for Supabase Edge Function secrets.
+Do not add `SUPABASE_SERVICE_ROLE_KEY` to the web app.
 
 ## 5. Create EA connection in website
 
@@ -91,7 +91,6 @@ Do not add `SUPABASE_SERVICE_ROLE_KEY` to the web app. That key is only for Supa
    - `InpSupabaseEaToken`
    - `InpSupabaseProjectUrl`
    - `InpSupabaseAnonKey`
-   - `InpSupabaseFunctionsUrl` only if you intentionally switch `InpWebUseRpc` to `false`
 
 ## 6. Install EA in MT5
 
@@ -105,12 +104,6 @@ Do not add `SUPABASE_SERVICE_ROLE_KEY` to the web app. That key is only for Supa
 https://YOUR_PROJECT_REF.supabase.co
 ```
 
-If you intentionally use the old Edge Function fallback, also allow:
-
-```text
-https://YOUR_PROJECT_REF.functions.supabase.co
-```
-
 6. Attach EA to XAUUSD/XAUUSDm chart.
 7. EA inputs:
 
@@ -119,7 +112,7 @@ InpWebControlEnabled    = true
 InpWebUseRpc            = true
 InpSupabaseProjectUrl   = https://YOUR_PROJECT_REF.supabase.co
 InpSupabaseAnonKey      = YOUR_SUPABASE_ANON_KEY
-InpSupabaseFunctionsUrl = https://YOUR_PROJECT_REF.functions.supabase.co
+InpSupabaseFunctionsUrl =
 InpSupabaseEaId         = copied EA ID
 InpSupabaseEaToken      = copied EA token
 InpRiskMoney            = account-currency risk per trade, for example 100
@@ -151,6 +144,4 @@ Use demo first. Do not use live until the command log, state updates, close, BE,
 
 ## Telegram alerts
 
-Telegram Edge Function calls are not used by the default website anymore. The `telegram-settings`, `telegram-chat-id`, and `telegram-offline-monitor` functions are kept only as legacy rollback files.
-
-If you intentionally restore the old Telegram screen later, alerts are sent from Supabase Edge Functions and the bot token is encrypted with `TELEGRAM_TOKEN_ENCRYPTION_KEY` before it is stored.
+Telegram alerts are sent by Supabase database RPC and `pg_net`, not by Supabase Edge Functions. Add one or more bots in the website Settings page, choose the alert types for each bot, and set delay seconds if needed. Bot tokens are stored in Supabase Vault.
