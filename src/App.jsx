@@ -743,8 +743,6 @@ function EASetup({ user, onCreated, onDone }) {
   const [symbol, setSymbol] = useState('XAUUSD')
   const [saving, setSaving] = useState(false)
   const [created, setCreated] = useState(null)
-  const eaProjectUrl = import.meta.env.VITE_SUPABASE_URL || 'https://PROJECT_REF.supabase.co'
-  const eaFunctionsUrl = eaProjectUrl.replace(/\/$/, '').replace('.supabase.co', '.functions.supabase.co')
 
   async function createEA() {
     setSaving(true)
@@ -789,9 +787,8 @@ function EASetup({ user, onCreated, onDone }) {
             <h3>Copy into MT5 EA inputs</h3>
             <CopyRow label="InpSupabaseEaId" value={created.id} />
             <CopyRow label="InpSupabaseEaToken" value={created.token} />
-            <CopyRow label="InpSupabaseProjectUrl" value={eaProjectUrl} />
+            <CopyRow label="InpSupabaseProjectUrl" value={`${import.meta.env.VITE_SUPABASE_URL || 'https://PROJECT_REF.supabase.co'}`} />
             <CopyRow label="InpSupabaseAnonKey" value={`${import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'}`} />
-            <CopyRow label="InpSupabaseFunctionsUrl" value={eaFunctionsUrl} />
             <div className="dangerText"><AlertTriangle size={18} /> Save the token now. It is shown only once.</div>
             <button className="primaryBtn fullBtn" onClick={() => onDone?.()}>Go To Dashboard</button>
           </div>
