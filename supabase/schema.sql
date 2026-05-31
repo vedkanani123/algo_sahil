@@ -74,7 +74,22 @@ create table if not exists public.telegram_settings (
     "command_failed": true,
     "ea_message": true,
     "ea_online": true,
-    "ea_offline": true
+    "ea_offline": true,
+    "details": {
+      "ea": true,
+      "account": true,
+      "symbol": true,
+      "side": true,
+      "volume": true,
+      "prices": true,
+      "rr": true,
+      "profit": true,
+      "status": true,
+      "command": true,
+      "message": true,
+      "time": true,
+      "reason": true
+    }
   }'::jsonb,
   connected_at timestamptz,
   created_at timestamptz not null default now(),
@@ -126,7 +141,22 @@ create table if not exists public.telegram_bots (
     "command_failed": true,
     "ea_message": true,
     "ea_online": true,
-    "ea_offline": true
+    "ea_offline": true,
+    "details": {
+      "ea": true,
+      "account": true,
+      "symbol": true,
+      "side": true,
+      "volume": true,
+      "prices": true,
+      "rr": true,
+      "profit": true,
+      "status": true,
+      "command": true,
+      "message": true,
+      "time": true,
+      "reason": true
+    }
   }'::jsonb,
   delay_seconds integer not null default 0 check (delay_seconds >= 0 and delay_seconds <= 3600),
   connected_at timestamptz,
@@ -902,6 +932,25 @@ revoke all on function public.tcx_ea_sync(uuid, text, jsonb, boolean, uuid, text
 revoke all on function public.tcx_ea_sync(uuid, text, jsonb, boolean, uuid, text, text, text, boolean) from authenticated;
 grant execute on function public.tcx_ea_sync(uuid, text, jsonb, boolean, uuid, text, text, text, boolean) to anon, service_role;
 
+create or replace function public.tcx_telegram_default_detail_prefs()
+returns jsonb as $$
+  select '{
+    "ea": true,
+    "account": true,
+    "symbol": true,
+    "side": true,
+    "volume": true,
+    "prices": true,
+    "rr": true,
+    "profit": true,
+    "status": true,
+    "command": true,
+    "message": true,
+    "time": true,
+    "reason": true
+  }'::jsonb;
+$$ language sql immutable set search_path = public;
+
 create or replace function public.tcx_telegram_default_prefs()
 returns jsonb as $$
   select '{
@@ -918,22 +967,36 @@ returns jsonb as $$
     "ea_message": true,
     "ea_online": true,
     "ea_offline": true
-  }'::jsonb;
+  }'::jsonb || jsonb_build_object('details', public.tcx_telegram_default_detail_prefs());
 $$ language sql immutable set search_path = public;
 
 create or replace function public.tcx_telegram_merge_prefs(p_prefs jsonb)
 returns jsonb as $$
 declare
   v_out jsonb := public.tcx_telegram_default_prefs();
+  v_details jsonb := public.tcx_telegram_default_detail_prefs();
   v_key text;
 begin
   if jsonb_typeof(p_prefs) = 'object' then
     for v_key in select jsonb_object_keys(v_out)
     loop
+      if v_key = 'details' then
+        continue;
+      end if;
       if jsonb_typeof(p_prefs -> v_key) = 'boolean' then
         v_out := jsonb_set(v_out, array[v_key], p_prefs -> v_key, true);
       end if;
     end loop;
+
+    if jsonb_typeof(p_prefs -> 'details') = 'object' then
+      for v_key in select jsonb_object_keys(v_details)
+      loop
+        if jsonb_typeof(p_prefs #> array['details', v_key]) = 'boolean' then
+          v_details := jsonb_set(v_details, array[v_key], p_prefs #> array['details', v_key], true);
+        end if;
+      end loop;
+      v_out := jsonb_set(v_out, '{details}', v_details, true);
+    end if;
   end if;
   return v_out;
 end;
@@ -947,6 +1010,76 @@ begin
   return coalesce((v_prefs ->> p_event_type)::boolean, true);
 exception when others then
   return true;
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_telegram_line_detail_key(p_line text)
+returns text as $$
+declare
+  v_line text := lower(trim(coalesce(p_line, '')));
+begin
+  if v_line = '' then
+    return null;
+  end if;
+
+  if v_line like 'ea:%' then return 'ea'; end if;
+  if v_line like 'account:%' then return 'account'; end if;
+  if v_line like 'symbol:%' then return 'symbol'; end if;
+  if v_line like 'type:%' then return 'side'; end if;
+  if v_line like 'volume:%' or v_line like 'closed volume:%' or v_line like 'remaining volume:%' then return 'volume'; end if;
+  if v_line like 'entry:%' or v_line like 'entry price:%' or v_line like 'exit:%' or v_line like 'sl:%' or v_line like 'sl price:%' or v_line like 'tp:%' or v_line like 'tp price:%' then return 'prices'; end if;
+  if v_line like 'rr:%' or v_line like 'current rr:%' then return 'rr'; end if;
+  if v_line like 'open p/l:%' or v_line like 'p/l:%' then return 'profit'; end if;
+  if v_line like 'status:%' or v_line like 'arm:%' then return 'status'; end if;
+  if v_line like 'action:%' or v_line like 'details:%' then return 'command'; end if;
+  if v_line like 'message:%' then return 'message'; end if;
+  if v_line like 'time:%' or v_line like 'last seen:%' then return 'time'; end if;
+  if v_line like 'reason:%' then return 'reason'; end if;
+  return null;
+end;
+$$ language plpgsql immutable set search_path = public;
+
+create or replace function public.tcx_telegram_apply_detail_prefs(
+  p_text text,
+  p_prefs jsonb,
+  p_event_type text default ''
+)
+returns text as $$
+declare
+  v_prefs jsonb := public.tcx_telegram_merge_prefs(p_prefs);
+  v_details jsonb := coalesce(v_prefs -> 'details', public.tcx_telegram_default_detail_prefs());
+  v_line text;
+  v_key text;
+  v_lines text[] := '{}';
+  v_previous_blank boolean := false;
+  v_result text;
+begin
+  for v_line in select regexp_split_to_table(coalesce(p_text, ''), E'\n')
+  loop
+    v_key := public.tcx_telegram_line_detail_key(v_line);
+    if v_key is not null and coalesce((v_details ->> v_key)::boolean, true) = false then
+      continue;
+    end if;
+
+    if trim(v_line) = '' then
+      if array_length(v_lines, 1) is null or v_previous_blank then
+        continue;
+      end if;
+      v_previous_blank := true;
+    else
+      v_previous_blank := false;
+    end if;
+
+    v_lines := array_append(v_lines, v_line);
+  end loop;
+
+  v_result := trim(both E'\n' from array_to_string(v_lines, E'\n'));
+  if nullif(trim(v_result), '') is null then
+    return left(coalesce(p_text, ''), 3900);
+  end if;
+  return left(v_result, 3900);
+exception when others then
+  return left(coalesce(p_text, ''), 3900);
 end;
 $$ language plpgsql immutable set search_path = public;
 
@@ -1223,7 +1356,7 @@ begin
       v_bot.id,
       p_event_type,
       left(coalesce(p_event_key, v_event_id::text), 250),
-      p_text,
+      public.tcx_telegram_apply_detail_prefs(p_text, v_bot.prefs, p_event_type),
       coalesce(p_payload, '{}'::jsonb),
       v_send_after,
       'pending'
@@ -1572,9 +1705,12 @@ exception when others then
 end;
 $$ language plpgsql security definer set search_path = public, net, extensions;
 
+revoke all on function public.tcx_telegram_default_detail_prefs() from public, anon, authenticated, service_role;
 revoke all on function public.tcx_telegram_default_prefs() from public, anon, authenticated, service_role;
 revoke all on function public.tcx_telegram_merge_prefs(jsonb) from public, anon, authenticated, service_role;
 revoke all on function public.tcx_telegram_pref_enabled(jsonb, text) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_line_detail_key(text) from public, anon, authenticated, service_role;
+revoke all on function public.tcx_telegram_apply_detail_prefs(text, jsonb, text) from public, anon, authenticated, service_role;
 revoke all on function public.tcx_to_numeric(text) from public;
 revoke all on function public.tcx_to_boolean(text) from public;
 revoke all on function public.tcx_try_jsonb(text) from public;

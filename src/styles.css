@@ -65,6 +65,7 @@ select {
 }
 
 button {
+  min-width: 0;
   min-height: 42px;
   border: 0;
   border-radius: var(--radius);
@@ -76,6 +77,8 @@ button {
   cursor: pointer;
   color: var(--text);
   font-weight: 700;
+  line-height: 1.15;
+  text-align: center;
   transition: transform 150ms ease, border-color 150ms ease, background 150ms ease, color 150ms ease, box-shadow 150ms ease;
 }
 
@@ -766,6 +769,14 @@ code,
   font-size: 38px;
   line-height: 1.08;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.heroLeft,
+.panelHeader > div,
+.multiMasterHeader > div,
+.rulesHero > div {
+  min-width: 0;
 }
 
 .hero p {
@@ -1637,8 +1648,26 @@ code,
   background: rgba(255, 255, 255, 0.025);
 }
 
-.multiAccountCard.expanded .accountHeaderMain > svg {
+.multiAccountCard.expanded .accountExpandIcon svg {
   transform: rotate(180deg);
+}
+
+.accountExpandIcon {
+  width: 36px;
+  min-height: 36px;
+  display: inline-grid;
+  place-items: center;
+  justify-self: end;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--muted);
+}
+
+.accountExpandIcon svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 150ms ease;
 }
 
 .accountOnlineDot {
@@ -1835,6 +1864,10 @@ code,
   grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
   gap: 18px;
   align-items: start;
+}
+
+.settingsPageOnly {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .settingsHeader {
@@ -2118,6 +2151,59 @@ code,
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.telegramDetailGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.telegramPreview {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(19, 184, 164, 0.26);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(19, 184, 164, 0.08), rgba(19, 184, 164, 0.025)),
+    var(--surface-muted);
+}
+
+.telegramPreviewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.telegramPreviewHeader strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.telegramPreviewHeader span {
+  flex: 0 0 auto;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 8px;
+  border: 1px solid rgba(19, 184, 164, 0.32);
+  border-radius: var(--radius);
+  background: rgba(19, 184, 164, 0.12);
+  color: #78fff1;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.telegramPreview pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: var(--text);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .historyPage {
   display: grid;
   gap: 18px;
@@ -2239,6 +2325,7 @@ code,
   font-size: 36px;
   line-height: 1.1;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
 
 .rulesHero p {
@@ -3049,7 +3136,7 @@ code,
   .app:has(.topbar),
   .app:has(.topbarClosed) {
     width: 100%;
-    padding: 84px 12px 12px;
+    padding: 12px;
   }
 
   .loginShell {
@@ -3063,12 +3150,15 @@ code,
   }
 
   .topbar {
-    inset: 8px 8px auto 8px;
-    width: auto;
+    position: sticky;
+    top: 8px;
+    inset: auto;
+    width: 100%;
     max-height: calc(100dvh - 16px);
     grid-template-rows: auto auto auto auto;
     gap: 10px;
     padding: 10px;
+    margin-bottom: 12px;
     overflow: auto;
   }
 
@@ -3091,9 +3181,23 @@ code,
 
   .topbarClosed .emailPrivacy,
   .topbarClosed .sidebarAccount,
-  .topbarClosed .viewToggle,
   .topbarClosed .topbarActions {
     display: none;
+  }
+
+  .topbarClosed .viewToggle {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+
+  .topbarClosed .viewToggle button {
+    width: 100%;
+    min-height: 40px;
+    padding: 0;
+    justify-content: center;
   }
 
   .topbarCollapseBtn,
@@ -3115,7 +3219,7 @@ code,
     grid-template-columns: 1fr;
   }
 
-  .viewToggle {
+  .topbar:not(.topbarClosed) .viewToggle {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -3178,15 +3282,32 @@ code,
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
+  .accountHeaderMain .accountOnlineDot {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .accountHeaderMain .accountTitleBlock {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .accountHeaderMain .accountExpandIcon {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
   .accountHeaderMetrics {
     grid-column: 1 / -1;
+    grid-row: 2;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .telegramManager,
   .telegramFormGrid,
   .telegramInputAction,
-  .telegramPrefGrid {
+  .telegramPrefGrid,
+  .telegramDetailGrid {
     grid-template-columns: 1fr;
   }
 }
@@ -3202,9 +3323,15 @@ code,
     padding: 8px;
   }
 
+  .app:has(.topbar),
+  .app:has(.topbarClosed) {
+    padding: 8px;
+  }
+
   .loginShell,
   .setupShell {
-    padding: 12px;
+    min-height: auto;
+    padding: 12px 8px;
   }
 
   .glass {
@@ -3220,35 +3347,47 @@ code,
   }
 
   .loginIntro h1 {
-    font-size: 32px;
+    font-size: 30px;
   }
 
-  .bigBtns,
-  .miniBtns,
-  .dangerZone,
+  .rulesHero h1 {
+    font-size: 26px;
+  }
+
   .settingsGrid,
-  .modeToggle,
   .prefGrid,
   .chatIdRow,
   .telegramSavedBox,
   .rulesControlGrid,
   .rulesInputGrid,
   .ruleStatusGrid,
-    .rulesBars,
-    .tierDiagram,
-    .objectivesGrid,
-    .accountSnapshotGrid,
-    .lossInfoGrid,
-    .statisticsGrid,
-    .masterStats,
-    .accountSnapshot,
-    .accountSettingsGrid,
-    .accountModeToggle,
-    .telegramManager,
-    .telegramFormGrid,
-    .telegramInputAction,
-    .telegramPrefGrid {
+  .accountSettingsGrid,
+  .telegramManager,
+  .telegramFormGrid,
+  .telegramInputAction,
+  .telegramPrefGrid,
+  .telegramDetailGrid {
     grid-template-columns: 1fr;
+  }
+
+  .bigBtns,
+  .dangerZone,
+  .modeToggle,
+  .rulesBars,
+  .tierDiagram,
+  .objectivesGrid,
+  .accountSnapshotGrid,
+  .lossInfoGrid,
+  .statisticsGrid,
+  .masterStats,
+  .accountSnapshot,
+  .accountModeToggle,
+  .historySummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .miniBtns {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .topbar {
@@ -3275,7 +3414,7 @@ code,
   }
 
   .brandText h2 {
-    font-size: 20px;
+    font-size: 18px;
     line-height: 1.05;
   }
 
@@ -3423,11 +3562,16 @@ code,
     gap: 8px;
   }
 
-  .viewToggle {
+  .topbar:not(.topbarClosed) .viewToggle {
     grid-column: 1 / -1;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 4px;
     padding: 4px;
+  }
+
+  .topbarClosed .viewToggle {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding: 6px 0 0;
   }
 
   .viewToggle button {
@@ -3435,6 +3579,13 @@ code,
     padding: 7px 6px;
     gap: 6px;
     font-size: 13px;
+  }
+
+  .topbarClosed .viewToggle button {
+    min-height: 36px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
   }
 
   .viewToggle button svg {
@@ -3493,14 +3644,24 @@ code,
   }
 
   .hero {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
     gap: 12px;
     margin-bottom: 12px;
     border-left-width: 4px;
   }
 
   .statusMeta {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
     gap: 6px;
     margin-bottom: 10px;
+  }
+
+  .statusMeta::-webkit-scrollbar,
+  .chips::-webkit-scrollbar {
+    display: none;
   }
 
   .onlineRow,
@@ -3518,7 +3679,7 @@ code,
   }
 
   .hero h1 {
-    font-size: 30px;
+    font-size: 24px;
   }
 
   .hero p {
@@ -3528,11 +3689,15 @@ code,
   }
 
   .chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
     gap: 6px;
     margin-top: 12px;
   }
 
   .chip {
+    flex: 0 0 auto;
     min-height: 30px;
     padding: 6px 8px;
     gap: 6px;
@@ -3540,24 +3705,30 @@ code,
   }
 
   .heroRight {
-    min-height: 142px;
+    min-height: 0;
+    padding: 8px;
+    align-self: start;
   }
 
   .scoreRing {
-    width: 104px;
-    height: 104px;
+    width: 78px;
+    height: 78px;
   }
 
   .scoreRing::before {
-    inset: 8px;
+    inset: 7px;
   }
 
   .scoreValue span {
-    font-size: 32px;
+    font-size: 24px;
   }
 
   .scoreValue small {
-    font-size: 14px;
+    font-size: 12px;
+  }
+
+  .heroRight p {
+    font-size: 10px;
   }
 
   .statGrid,
@@ -3569,11 +3740,22 @@ code,
   }
 
   .statGrid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .historySummary {
+  .statCard {
     grid-template-columns: 1fr;
+    gap: 9px;
+    padding: 12px;
+  }
+
+  .statIcon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .statInfo strong {
+    font-size: 17px;
   }
 
   .multiMaster {
@@ -3585,7 +3767,7 @@ code,
   }
 
   .masterControls {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .masterControls button {
@@ -3612,7 +3794,7 @@ code,
   }
 
   .accountHeaderMetrics {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
   }
 
@@ -3630,6 +3812,11 @@ code,
 
   .accountMiniRow {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .accountCardFooter {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .copyRow {
@@ -3700,5 +3887,50 @@ code,
     color: var(--muted);
     font-size: 12px;
     font-weight: 900;
+  }
+}
+
+@media (max-width: 380px) {
+  .app,
+  .app:has(.topbar),
+  .app:has(.topbarClosed) {
+    padding: 6px;
+  }
+
+  button {
+    padding-inline: 10px;
+  }
+
+  .brandText h2 {
+    font-size: 17px;
+  }
+
+  .bigBtns button {
+    min-height: 58px;
+    font-size: 15px;
+  }
+
+  .miniBtns button,
+  .dangerZone button,
+  .masterControls button,
+  .accountActionGrid button {
+    font-size: 11px;
+    gap: 5px;
+    padding-inline: 6px;
+  }
+
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .heroRight {
+    grid-template-columns: auto minmax(0, 1fr);
+    justify-content: start;
+    width: 100%;
+  }
+
+  .scoreRing {
+    width: 68px;
+    height: 68px;
   }
 }

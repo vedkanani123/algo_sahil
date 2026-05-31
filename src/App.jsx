@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { hasSupabaseConfig, supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from './supabaseClient.js'
+import { hasSupabaseConfig, supabase } from './supabaseClient.js'
 import './styles.css'
 import {
   Activity,
@@ -88,7 +88,25 @@ const TELEGRAM_PREF_ITEMS = [
   { key: 'ea_offline', label: 'EA Offline' }
 ]
 
-const TELEGRAM_DEFAULT_PREFS = TELEGRAM_PREF_ITEMS.reduce((prefs, item) => ({ ...prefs, [item.key]: true }), {})
+const TELEGRAM_DETAIL_ITEMS = [
+  { key: 'ea', label: 'EA Name' },
+  { key: 'account', label: 'Account' },
+  { key: 'symbol', label: 'Symbol' },
+  { key: 'side', label: 'Trade Type' },
+  { key: 'volume', label: 'Volume' },
+  { key: 'prices', label: 'Entry SL TP' },
+  { key: 'rr', label: 'RR' },
+  { key: 'profit', label: 'Profit/Loss' },
+  { key: 'status', label: 'Status Arm' },
+  { key: 'command', label: 'Command Details' },
+  { key: 'message', label: 'EA Message Text' },
+  { key: 'time', label: 'Time' },
+  { key: 'reason', label: 'Reason' }
+]
+
+const TELEGRAM_DEFAULT_ALERT_PREFS = TELEGRAM_PREF_ITEMS.reduce((prefs, item) => ({ ...prefs, [item.key]: true }), {})
+const TELEGRAM_DEFAULT_DETAIL_PREFS = TELEGRAM_DETAIL_ITEMS.reduce((prefs, item) => ({ ...prefs, [item.key]: true }), {})
+const TELEGRAM_DEFAULT_PREFS = { ...TELEGRAM_DEFAULT_ALERT_PREFS, details: { ...TELEGRAM_DEFAULT_DETAIL_PREFS } }
 
 const RULE_COMPANIES = [
   { id: 'fundingpips', label: 'FundingPips', hasRules: true },
@@ -585,13 +603,75 @@ function uid() {
 }
 
 function telegramPrefs(prefs) {
-  const next = { ...TELEGRAM_DEFAULT_PREFS }
+  const next = { ...TELEGRAM_DEFAULT_ALERT_PREFS, details: { ...TELEGRAM_DEFAULT_DETAIL_PREFS } }
   if (prefs && typeof prefs === 'object' && !Array.isArray(prefs)) {
     for (const item of TELEGRAM_PREF_ITEMS) {
       if (typeof prefs[item.key] === 'boolean') next[item.key] = prefs[item.key]
     }
+    const detailPrefs = prefs.details
+    if (detailPrefs && typeof detailPrefs === 'object' && !Array.isArray(detailPrefs)) {
+      for (const item of TELEGRAM_DETAIL_ITEMS) {
+        if (typeof detailPrefs[item.key] === 'boolean') next.details[item.key] = detailPrefs[item.key]
+      }
+    }
   }
   return next
+}
+
+function telegramDetailKeyForLine(line) {
+  const text = String(line || '').trim().toLowerCase()
+  if (!text) return null
+  if (text.startsWith('ea:')) return 'ea'
+  if (text.startsWith('account:')) return 'account'
+  if (text.startsWith('symbol:')) return 'symbol'
+  if (text.startsWith('type:')) return 'side'
+  if (text.startsWith('volume:') || text.startsWith('closed volume:') || text.startsWith('remaining volume:')) return 'volume'
+  if (text.startsWith('entry:') || text.startsWith('entry price:') || text.startsWith('exit:') || text.startsWith('sl:') || text.startsWith('sl price:') || text.startsWith('tp:') || text.startsWith('tp price:')) return 'prices'
+  if (text.startsWith('rr:') || text.startsWith('current rr:')) return 'rr'
+  if (text.startsWith('open p/l:') || text.startsWith('p/l:')) return 'profit'
+  if (text.startsWith('status:') || text.startsWith('arm:')) return 'status'
+  if (text.startsWith('action:') || text.startsWith('details:')) return 'command'
+  if (text.startsWith('message:')) return 'message'
+  if (text.startsWith('time:') || text.startsWith('last seen:')) return 'time'
+  if (text.startsWith('reason:')) return 'reason'
+  return null
+}
+
+function telegramExampleMessage(prefs) {
+  const detailPrefs = telegramPrefs(prefs).details
+  const lines = [
+    'Trade Opened',
+    '',
+    'EA: XAUUSD Main VPS (XAUUSD)',
+    'Symbol: XAUUSD',
+    'Type: BUY',
+    'Volume: 0.10',
+    '',
+    'Entry Price: 2350.25',
+    'SL Price: 2344.25',
+    'TP Price: 2368.25',
+    'RR: 1:3.0',
+    '',
+    'Open P/L: +USD 42.50',
+    'Account: 12345678',
+    'Status: Armed BUY',
+    'Arm: BUY',
+    'Time: 2026-05-31 12:45'
+  ]
+  const visible = []
+  let previousBlank = false
+  for (const line of lines) {
+    const key = telegramDetailKeyForLine(line)
+    if (key && detailPrefs[key] === false) continue
+    if (!line.trim()) {
+      if (!visible.length || previousBlank) continue
+      previousBlank = true
+    } else {
+      previousBlank = false
+    }
+    visible.push(line)
+  }
+  return visible.join('\n').trim()
 }
 
 function emptyTelegramBotForm() {
@@ -840,9 +920,13 @@ function MissingConfig() {
   )
 }
 
-function CollapsibleSection({ id, title, eyebrow, icon, children, defaultOpen = true, className = '', bodyClassName = '' }) {
+function isPhoneViewport() {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 620px)').matches
+}
+
+function CollapsibleSection({ id, title, eyebrow, icon, children, defaultOpen = true, mobileDefaultOpen = defaultOpen, className = '', bodyClassName = '' }) {
   const storageKey = `tcx-section-open-${id}`
-  const [open, setOpen] = useState(defaultOpen)
+  const [open, setOpen] = useState(() => isPhoneViewport() ? mobileDefaultOpen : defaultOpen)
 
   useEffect(() => {
     try {
@@ -890,7 +974,7 @@ function Topbar({ user, instances, selectedId, setSelectedId, refresh, onNewEa, 
   const [menuOpen, setMenuOpen] = useState(() => {
     try {
       const saved = window.localStorage.getItem('tcx-topbar-open')
-      return saved === null ? true : saved === 'true'
+      return saved === null ? window.innerWidth > 860 : saved === 'true'
     } catch {
       return true
     }
@@ -1785,7 +1869,7 @@ function MultiAccountCard({ session, account, onToggleSelected, onToggleExpanded
             <span>Risk {moneyPlain(state.risk, currency)}</span>
             <span>{state.status || 'Waiting'}</span>
           </span>
-          <ChevronDown size={18} />
+          <span className="accountExpandIcon" aria-hidden="true"><ChevronDown size={18} /></span>
         </button>
       </div>
 
@@ -2059,6 +2143,24 @@ function TelegramSettingsPanel() {
     setForm(current => ({ ...current, prefs: { ...telegramPrefs(current.prefs), [key]: value } }))
   }
 
+  function updateDetailPref(key, value) {
+    setForm(current => {
+      const prefs = telegramPrefs(current.prefs)
+      return { ...current, prefs: { ...prefs, details: { ...prefs.details, [key]: value } } }
+    })
+  }
+
+  function setAllAlertPrefs(value) {
+    setForm(current => ({ ...current, prefs: { ...telegramPrefs(current.prefs), ...Object.fromEntries(TELEGRAM_PREF_ITEMS.map(item => [item.key, value])) } }))
+  }
+
+  function setAllDetailPrefs(value) {
+    setForm(current => {
+      const prefs = telegramPrefs(current.prefs)
+      return { ...current, prefs: { ...prefs, details: Object.fromEntries(TELEGRAM_DETAIL_ITEMS.map(item => [item.key, value])) } }
+    })
+  }
+
   function editBot(bot) {
     setForm({
       id: bot.id,
@@ -2233,8 +2335,8 @@ function TelegramSettingsPanel() {
           <div className="telegramPrefHeader">
             <strong>Send These Alerts</strong>
             <div className="telegramQuickBtns">
-              <button type="button" className="ghostBtn compactBtn" onClick={() => updateForm('prefs', { ...TELEGRAM_DEFAULT_PREFS })}>All</button>
-              <button type="button" className="ghostBtn compactBtn" onClick={() => updateForm('prefs', Object.fromEntries(TELEGRAM_PREF_ITEMS.map(item => [item.key, false])))}>None</button>
+              <button type="button" className="ghostBtn compactBtn" onClick={() => setAllAlertPrefs(true)}>All</button>
+              <button type="button" className="ghostBtn compactBtn" onClick={() => setAllAlertPrefs(false)}>None</button>
             </div>
           </div>
 
@@ -2245,6 +2347,31 @@ function TelegramSettingsPanel() {
                 <span>{item.label}</span>
               </label>
             ))}
+          </div>
+
+          <div className="telegramPrefHeader">
+            <strong>Message Details</strong>
+            <div className="telegramQuickBtns">
+              <button type="button" className="ghostBtn compactBtn" onClick={() => setAllDetailPrefs(true)}>All</button>
+              <button type="button" className="ghostBtn compactBtn" onClick={() => setAllDetailPrefs(false)}>None</button>
+            </div>
+          </div>
+
+          <div className="prefGrid telegramDetailGrid">
+            {TELEGRAM_DETAIL_ITEMS.map(item => (
+              <label className="prefItem" key={item.key}>
+                <input type="checkbox" checked={Boolean(telegramPrefs(form.prefs).details[item.key])} onChange={e => updateDetailPref(item.key, e.target.checked)} />
+                <span>{item.label}</span>
+              </label>
+            ))}
+          </div>
+
+          <div className="telegramPreview">
+            <div className="telegramPreviewHeader">
+              <strong>Example Message</strong>
+              <span>Trade Open</span>
+            </div>
+            <pre>{telegramExampleMessage(form.prefs)}</pre>
           </div>
 
           <div className="telegramActions">
@@ -2260,58 +2387,8 @@ function TelegramSettingsPanel() {
 }
 
 function ConnectionSettingsPage() {
-  const projectUrl = SUPABASE_URL || 'https://YOUR_PROJECT_REF.supabase.co'
-  const anonKey = SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'
-  const rpcUrl = `${projectUrl.replace(/\/$/, '')}/rest/v1/rpc/tcx_ea_sync`
-
   return (
-    <section className="settingsPage">
-      <div className="glass panel telegramPanel">
-        <div className="panelHeader settingsHeader">
-          <div className="panelIcon"><Database /></div>
-          <div>
-            <p className="sectionEyebrow">RPC bridge</p>
-            <h2>Supabase Connection</h2>
-          </div>
-          <div className="telegramStatus connected">Active</div>
-        </div>
-
-        <div className="telegramGrid">
-          <div className="telegramSavedBox">
-            <div><span>EA Sync</span><strong>Postgres RPC</strong></div>
-            <div><span>Commands</span><strong>Postgres RPC</strong></div>
-            <div><span>Dashboard</span><strong>Database + Realtime</strong></div>
-            <div><span>Edge Calls</span><strong>Unused</strong></div>
-          </div>
-
-          <label>
-            Project URL
-            <input value={projectUrl} readOnly />
-          </label>
-
-          <label>
-            Anon Key
-            <input value={anonKey} readOnly />
-          </label>
-
-          <label>
-            EA RPC URL
-            <input value={rpcUrl} readOnly />
-          </label>
-
-          <div className="telegramActions">
-            <button className="ghostBtn" onClick={() => navigator.clipboard?.writeText(projectUrl)}>
-              <Copy size={16} /> Project URL
-            </button>
-            <button className="ghostBtn" onClick={() => navigator.clipboard?.writeText(anonKey)}>
-              <Copy size={16} /> Anon Key
-            </button>
-            <button className="ghostBtn" onClick={() => navigator.clipboard?.writeText(rpcUrl)}>
-              <Copy size={16} /> RPC URL
-            </button>
-          </div>
-        </div>
-      </div>
+    <section className="settingsPage settingsPageOnly">
       <TelegramSettingsPanel />
     </section>
   )
@@ -3060,13 +3137,13 @@ function Dashboard({ session }) {
           <CollapsibleSection id={`${selectedId}-status`} title="Status" eyebrow="Live EA" icon={<Activity />} bodyClassName="flushBody">
             <StatusHero state={state} selected={selected} />
           </CollapsibleSection>
-          <CollapsibleSection id={`${selectedId}-stats`} title="Account Stats" eyebrow="Money & Risk" icon={<WalletCards />} bodyClassName="flushBody">
+          <CollapsibleSection id={`${selectedId}-stats`} title="Account Stats" eyebrow="Money & Risk" icon={<WalletCards />} bodyClassName="flushBody" mobileDefaultOpen={false}>
             <StatCards state={state} />
           </CollapsibleSection>
           <CollapsibleSection id={`${selectedId}-controls`} title="Trade Controls" eyebrow="Execution" icon={<PlayCircle />} bodyClassName="flushBody">
             <CommandPanel session={session} selected={selected} state={state} reloadCommands={() => loadCommands(selectedId)} />
           </CollapsibleSection>
-          <CollapsibleSection id={`${selectedId}-positions`} title="Positions" eyebrow="Open Trades" icon={<Gauge />} bodyClassName="flushBody">
+          <CollapsibleSection id={`${selectedId}-positions`} title="Positions" eyebrow="Open Trades" icon={<Gauge />} bodyClassName="flushBody" mobileDefaultOpen={false}>
             <PositionPanel state={state} />
           </CollapsibleSection>
           <CollapsibleSection id={`${selectedId}-structure`} title="Market Structure" eyebrow="Model Checks" icon={<Zap />} bodyClassName="flushBody" defaultOpen={false}>
